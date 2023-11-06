@@ -1,0 +1,35 @@
+{
+  "title": "Roll Tracker (WFRP4)",
+  "description": "A simple module which tracks the d20 rolls made and logs them by each user.",
+  "authors": [
+    {
+      "name": "drexl93",
+      "flags": {}
+    },
+    {
+      "name": "Robak132",
+      "flags": {}
+    }
+  ],
+  "version": "1.8.2",
+  "scripts": [
+    "scripts/roll-tracker.js"
+  ],
+  "styles": [
+    "styles/roll-tracker.css"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "languages/en.json",
+      "flags": {}
+    }
+  ],
+  "socket": true,
+  "id": "roll-tracker",
+  "compatibility": {
+    "minimum": "11",
+    "verified": "11"
+  }
+}
