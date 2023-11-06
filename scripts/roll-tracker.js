@@ -1,5 +1,5 @@
 /** TODO:
- * SETTINGS - CAN PLAYERS CLEAR THEIR OWN ROLLS? TREAT FORTUNE/MISFORTUNE AS ONLY THE ROLL TAKEN OR BOTH ROLLED?
+ *  - CAN PLAYERS CLEAR THEIR OWN ROLLS? TREAT FORTUNE/MISFORTUNE AS ONLY THE ROLL TAKEN OR BOTH ROLLED?
  * * HAVE CHECKBOXES FOR WHAT KIND OF ROLLS ARE CONSIDERED - VERY SYSTEM SPECIFIC
  * SIZE OF DICE TO BE TRACKED
  * NEW FEATURES - One click clear everyone's rolls
@@ -13,19 +13,15 @@
 
 // Whenever a chat message is created, check if it contains a roll. If so, parse it to determine
 // whether it should be tracked, according to our module settings
-Hooks.on('createChatMessage', (chatMessage) => {
-  if (chatMessage.isRoll) {
-    RollTracker.parseMessage(chatMessage, RollTracker.SYSTEM)
-  }
+Hooks.on('updateChatMessage', async (chatMessage) => {
+  await RollTracker.parseMessage(chatMessage)
 })
 
 // This adds our icon to the player list
 Hooks.on('renderPlayerList', (playerList, html) => {
-
   if (game.user.isGM) {
-    if (game.settings.get(RollTracker.ID, RollTracker.SETTINGS.GM_SEE_PLAYERS)) {
+    if (game.settings.get('roll-tracker', 'gm_see_players')) {
       // This adds our icon to ALL players on the player list, if the setting is toggled
-      // tooltip
       const tooltip = game.i18n.localize('ROLL-TRACKER.button-title')
       // create the button where we want it to be
       for (let user of game.users) {
@@ -38,15 +34,13 @@ Hooks.on('renderPlayerList', (playerList, html) => {
     } else {
       // Put the roll tracker icon only beside the GM's name
       const loggedInUser = html.find(`[data-user-id="${game.userId}"]`)
-
       const tooltip = game.i18n.localize('ROLL-TRACKER.button-title')
-
       loggedInUser.append(`<button type="button" title='${tooltip}' class="roll-tracker-item-button flex0" id="${game.userId}"><i class="fas fa-dice-d20"></i></button>`)
       html.on('click', `#${game.userId}`, () => {
         new RollTrackerDialog(game.userId).render(true);
       })
     }
-  } else if (game.settings.get(RollTracker.ID, RollTracker.SETTINGS.PLAYERS_SEE_PLAYERS)) {
+  } else if (game.settings.get('roll-tracker', 'players_see_players')) {
     // find the element which has our logged in user's id
     const loggedInUser = html.find(`[data-user-id="${game.userId}"]`)
 
@@ -61,7 +55,7 @@ Hooks.on('renderPlayerList', (playerList, html) => {
 
 // Register our module with the Dev Mode module, for logging purposes
 Hooks.once('devModeReady', ({registerPackageDebugFlag}) => {
-  registerPackageDebugFlag(RollTracker.ID)
+  registerPackageDebugFlag('roll-tracker')
 })
 
 // Initialize dialog and settings on foundry boot up
@@ -114,194 +108,133 @@ Handlebars.registerHelper('isSecondLast', function (index, length) {
 });
 
 
-// Store basic module info
 class RollTracker {
-  static ID = 'roll-tracker'
-
   static FLAGS = {
-    SORTED: 'sorted', EXPORT: 'export', UNSORTED: 'unsorted', STREAK: 'streak',
+    SORTED: 'sorted',
+    EXPORT: 'export',
+    UNSORTED: 'unsorted',
+    STREAK: 'streak',
   }
 
-  static TEMPLATES = {
-    ROLLTRACK: `modules/${this.ID}/templates/${this.ID}.hbs`, CHATMSG: `modules/${this.ID}/templates/${this.ID}-chat.hbs`, COMPARISONCARD: `modules/${this.ID}/templates/${this.ID}-comparison-card.hbs`
+  static templates = {
+    rolltrack: `modules/roll-tracker/templates/roll-tracker.hbs`,
+    CHATMSG: `modules/roll-tracker/templates/roll-tracker-chat.hbs`,
+    COMPARISONCARD: `modules/roll-tracker/templates/roll-tracker-comparison-card.hbs`
   }
 
   // This logging function ties in with the Developer Mode module. It will log a custom, module namespaced
   // message in the dev console when RollTracker.log() is called. When Developer Mode is not enabled (as in
-  static SETTINGS = {
-    GM_SEE_PLAYERS: 'gm_see_players',
-    PLAYERS_SEE_PLAYERS: 'players_see_players',
-    ROLL_STORAGE: 'roll_storage',
-    COUNT_HIDDEN: 'count_hidden',
-    STREAK_MESSAGE_HIDDEN: 'streak_message_hidden',
-    STREAK_BEHAVIOUR: 'streak_behaviour',
-    STREAK_THRESHOLD: 'streak_threshold',
-    DND5E: {
-      RESTRICT_COUNTED_ROLLS: 'restrict_counted_rolls'
-    },
-    PF2E: {
-      RESTRICT_COUNTED_ROLLS: 'restrict_counted_rolls'
-    }
-  }
-
   // most non-dev environments) the log will not show. Prevents logs leaking into full releases
   static log(force, ...args) {
-    const shouldLog = force || game.modules.get('_dev-mode')?.api?.getPackageDebugValue(this.ID)
+    const shouldLog = force || game.modules.get('_dev-mode')?.api?.getPackageDebugValue('roll-tracker')
 
     if (shouldLog) {
-      console.log(this.ID, '|', ...args)
+      console.log('roll-tracker', '|', ...args)
     }
   }
 
   static initialize() {
-    // Store the current system, for settings purposes. It has to be set here, and not in the parent
-    // class, because the system needs to initialize on foundry boot up before we can get its id
-    this.SYSTEM = `${game.system.id}`
-
-    // A setting to toggle whether the GM can see the icon allowing them access to player roll
-    // data or not
-    game.settings.register(this.ID, this.SETTINGS.GM_SEE_PLAYERS, {
-      name: `ROLL-TRACKER.settings.${this.SETTINGS.GM_SEE_PLAYERS}.Name`, default: true, type: Boolean, scope: 'world', config: true, hint: `ROLL-TRACKER.settings.${this.SETTINGS.GM_SEE_PLAYERS}.Hint`, onChange: () => ui.players.render()
-    })
-
-    // A setting to determine how many rolls should be stored at any one time
-    game.settings.register(this.ID, this.SETTINGS.ROLL_STORAGE, {
-      name: `ROLL-TRACKER.settings.${this.SETTINGS.ROLL_STORAGE}.Name`, default: 50, type: Number, range: {
-        min: 10, max: 500, step: 10
-      }, scope: 'world', config: true, hint: `ROLL-TRACKER.settings.${this.SETTINGS.ROLL_STORAGE}.Hint`,
-    })
-
-    // A setting to determine whether players can see their own tracked rolls
-    game.settings.register(this.ID, this.SETTINGS.PLAYERS_SEE_PLAYERS, {
-      name: `ROLL-TRACKER.settings.${this.SETTINGS.PLAYERS_SEE_PLAYERS}.Name`,
+    // A setting to toggle whether the GM can see the icon allowing them access to player roll data or not
+    game.settings.register('roll-tracker', 'gm_see_players', {
+      name: `ROLL-TRACKER.settings.gm_see_players.Name`,
       default: true,
       type: Boolean,
       scope: 'world',
       config: true,
-      hint: `ROLL-TRACKER.settings.${this.SETTINGS.PLAYERS_SEE_PLAYERS}.Hint`,
+      hint: `ROLL-TRACKER.settings.gm_see_players.Hint`,
+      onChange: () => ui.players.render()
+    })
+
+    // A setting to determine how many rolls should be stored at any one time
+    game.settings.register('roll-tracker', 'roll_storage', {
+      name: `ROLL-TRACKER.settings.roll_storage.Name`,
+      default: 50,
+      type: Number,
+      range: {
+        min: 10,
+        max: 500,
+        step: 10
+      },
+      scope: 'world',
+      config: true,
+      hint: `ROLL-TRACKER.settings.roll_storage.Hint`,
+    })
+
+    // A setting to determine whether players can see their own tracked rolls
+    game.settings.register('roll-tracker', 'players_see_players', {
+      name: `ROLL-TRACKER.settings.players_see_players.Name`,
+      default: true,
+      type: Boolean,
+      scope: 'world',
+      config: true,
+      hint: `ROLL-TRACKER.settings.players_see_players.Hint`,
       onChange: () => ui.players.render()
     })
 
     // A setting to determine whether blind GM rolls that PLAYERS make are tracked
     // Blind GM rolls that GMs make are always tracked
-    game.settings.register(this.ID, this.SETTINGS.COUNT_HIDDEN, {
-      name: `ROLL-TRACKER.settings.${this.SETTINGS.COUNT_HIDDEN}.Name`, default: true, type: Boolean, scope: 'world', config: true, hint: `ROLL-TRACKER.settings.${this.SETTINGS.COUNT_HIDDEN}.Hint`,
+    game.settings.register('roll-tracker', 'count_hidden', {
+      name: `ROLL-TRACKER.settings.count_hidden.Name`,
+      default: true,
+      type: Boolean,
+      scope: 'world',
+      config: true,
+      hint: `ROLL-TRACKER.settings.count_hidden.Hint`,
     })
 
     // Are streaks completely disabled, are they shown only to GMs, or are they shown to everyone
-    game.settings.register(this.ID, this.SETTINGS.STREAK_BEHAVIOUR, {
-      name: `ROLL-TRACKER.settings.${this.SETTINGS.STREAK_BEHAVIOUR}.Name`, default: true, type: String, scope: 'world', config: true, hint: `ROLL-TRACKER.settings.${this.SETTINGS.STREAK_BEHAVIOUR}.Hint`, choices: {
-        hidden: game.i18n.localize(`ROLL-TRACKER.settings.${this.SETTINGS.STREAK_BEHAVIOUR}.hidden`),
-        disable: game.i18n.localize(`ROLL-TRACKER.settings.${this.SETTINGS.STREAK_BEHAVIOUR}.disable`),
-        shown: game.i18n.localize(`ROLL-TRACKER.settings.${this.SETTINGS.STREAK_BEHAVIOUR}.shown`)
+    game.settings.register('roll-tracker', 'streak_behaviour', {
+      name: `ROLL-TRACKER.settings.streak_behaviour.Name`,
+      default: true,
+      type: String,
+      scope: 'world',
+      config: true,
+      hint: `ROLL-TRACKER.settings.streak_behaviour.Hint`,
+      choices: {
+        hidden: game.i18n.localize(`ROLL-TRACKER.settings.streak_behaviour.hidden`),
+        disable: game.i18n.localize(`ROLL-TRACKER.settings.streak_behaviour.disable`),
+        shown: game.i18n.localize(`ROLL-TRACKER.settings.streak_behaviour.shown`)
       }
     })
 
-    // What is the threshold of consecutive rolls within 1 point of each other that should be considered
-    // a streak?
-    game.settings.register(this.ID, this.SETTINGS.STREAK_THRESHOLD, {
-      name: `ROLL-TRACKER.settings.${this.SETTINGS.STREAK_THRESHOLD}.Name`, default: true, type: Number, range: {
-        min: 2, max: 5, step: 1
-      }, scope: 'world', config: true, hint: `ROLL-TRACKER.settings.${this.SETTINGS.STREAK_THRESHOLD}.Hint`
+    // What is the threshold of consecutive rolls within 1 point of each other that should be considered a streak?
+    game.settings.register('roll-tracker', 'streak_threshold', {
+      name: `ROLL-TRACKER.settings.streak_threshold.Name`,
+      default: true,
+      type: Number,
+      range: {
+        min: 2,
+        max: 5,
+        step: 1
+      },
+      scope: 'world',
+      config: true,
+      hint: `ROLL-TRACKER.settings.streak_threshold.Hint`
     })
-
-    // System specific settings
-    switch (this.SYSTEM) {
-      case 'dnd5e':
-        // A setting to specify that only rolls connected to an actor will be counted, not just
-        // random '/r 1d20s' or the like
-        game.settings.register(this.ID, this.SETTINGS.DND5E.RESTRICT_COUNTED_ROLLS, {
-          name: `ROLL-TRACKER.settings.dnd5e.${this.SETTINGS.DND5E.RESTRICT_COUNTED_ROLLS}.Name`,
-          default: true,
-          type: Boolean,
-          scope: 'world',
-          config: true,
-          hint: `ROLL-TRACKER.settings.dnd5e.${this.SETTINGS.DND5E.RESTRICT_COUNTED_ROLLS}.Hint`,
-        })
-        break;
-      case 'pf2e':
-        // A setting to specify that only rolls connected to an actor will be counted, not just
-        // random '/r 1d20s' or the like
-        game.settings.register(this.ID, this.SETTINGS.PF2E.RESTRICT_COUNTED_ROLLS, {
-          name: `ROLL-TRACKER.settings.pf2e.${this.SETTINGS.PF2E.RESTRICT_COUNTED_ROLLS}.Name`,
-          default: true,
-          type: Boolean,
-          scope: 'world',
-          config: true,
-          hint: `ROLL-TRACKER.settings.pf2e.${this.SETTINGS.PF2E.RESTRICT_COUNTED_ROLLS}.Hint`,
-        })
-        break;
-    }
   }
 
-  // This function creates an object containing all the requirements that need to be met for the roll
-  // to be counted, taking into account all the currently active settings. If all of the conditions are
-  // met, the roll is recorded.
-  static async parseMessage(chatMessage, system) {
+  /**
+   * This function creates an object containing all the requirements that need to be met for the roll
+   * to be counted, taking into account all the currently active settings. If all of the conditions are
+   * met, the roll is recorded.
+   */
+  static async parseMessage(chatMessage) {
     const isBlind = chatMessage.blind
-    const rollRequirements = {
-      isd20: chatMessage.rolls[0]?.dice[0]?.faces === 20, blindCheck: (!isBlind) || (isBlind && game.settings.get(this.ID, this.SETTINGS.COUNT_HIDDEN)) || (isBlind && chatMessage.rolls[0]?.roller.isGM),
+    if (!isBlind || (isBlind && game.settings.get('roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
+      await RollTrackerData.createTrackedRoll(chatMessage.user, chatMessage.flags.testData, isBlind)
     }
-    switch (system) {
-      case 'dnd5e':
-        if (game.settings.get(this.ID, this.SETTINGS.DND5E.RESTRICT_COUNTED_ROLLS)) {
-          rollRequirements.dnd5e_restrict_passed = !!chatMessage.flags.dnd5e?.roll?.type;
-        }
-        break;
-      case 'pf2e':
-        if (game.settings.get(this.ID, this.SETTINGS.PF2E.RESTRICT_COUNTED_ROLLS)) {
-          rollRequirements.pf2e_restrict_passed = !!chatMessage.flags.pf2e?.context?.type;
-        }
-        break;
-    }
-    const checksPassed = Object.values(rollRequirements).every(check => {
-      return check === true
-    })
-    if (chatMessage.isContentVisible) {
-      await RollTrackerHelper.waitFor3DDiceMessage(chatMessage.id)
-    }
-    if (checksPassed) {
-      RollTrackerData.createTrackedRoll(chatMessage.user, chatMessage.rolls[0], isBlind)
-    }
-  }
-}
-
-class RollTrackerHelper {
-// Functions that don't specifically manipulate data but are referenced or used
-  // If Dice So Nice is enabled, this will help us wait until after the animation is shown
-  // to send chat messages such as the Streak chat message, so we don't ruin the surprise of
-  // the roll
-  static async waitFor3DDiceMessage(targetMessageId) {
-    function buildHook(resolve) {
-      Hooks.once('diceSoNiceRollComplete', (messageId) => {
-        if (targetMessageId === messageId) {
-          resolve(true);
-        } else {
-          buildHook(resolve)
-        }
-      });
-    }
-
-    return new Promise((resolve) => {
-      if (game.dice3d) {
-        buildHook(resolve);
-      } else {
-        resolve(true);
-      }
-    });
   }
 }
 
 class RollTrackerData {
-// Our main data workhorse class
   static getUserRolls(userId) {
     // A simple retrieve method that gets the stored flag on a specified user
     return {
       user: game.users.get(userId),
-      sorted: game.users.get(userId)?.getFlag(RollTracker.ID, RollTracker.FLAGS.SORTED),
-      unsorted: game.users.get(userId)?.getFlag(RollTracker.ID, RollTracker.FLAGS.UNSORTED),
-      export: game.users.get(userId)?.getFlag(RollTracker.ID, RollTracker.FLAGS.EXPORT),
-      streak: game.users.get(userId)?.getFlag(RollTracker.ID, RollTracker.FLAGS.STREAK),
+      sorted: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.SORTED),
+      unsorted: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.UNSORTED),
+      export: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.EXPORT),
+      streak: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.STREAK),
     }
   }
 
@@ -311,11 +244,10 @@ class RollTrackerData {
       // to create and update these rolls. Players, however, do not have permission to edit the data
       // of other users, so errors are thrown. This way the only foundry instance that creates the tracked
       // roll is the foundry instance of the user actually making the roll
-      let updatedRolls = []
-      const newNumbers = rollData.dice[0].results.map(result => result.result) // In case there's more than one d20 roll in a single instance as in fortune/misfortune rolls
+      let updatedRolls
       let oldSorted = this.getUserRolls(user.id)?.sorted || []
       let oldUnsorted = this.getUserRolls(user.id)?.unsorted || []
-      const limit = game.settings.get(RollTracker.ID, RollTracker.SETTINGS.ROLL_STORAGE)
+      const limit = game.settings.get('roll-tracker', 'roll_storage')
       if (oldUnsorted.length >= limit) {
         const difference = oldUnsorted.length - limit
         for (let i = 0; i <= difference; i++) {
@@ -328,11 +260,9 @@ class RollTrackerData {
       }
       if (oldSorted.length) {
         updatedRolls = [...oldSorted]
-        newNumbers.forEach(e => {
-          updatedRolls.unshift(e)
-          oldUnsorted.push(e)
-          updatedRolls = this.sortRolls(updatedRolls)
-        })
+        updatedRolls.unshift(rollData.result.roll)
+        oldUnsorted.push(rollData.result.roll)
+        updatedRolls = this.sortRolls(updatedRolls)
 
         // Streak calculations
         let streak = {}
@@ -340,8 +270,7 @@ class RollTrackerData {
         // If there was an ongoing streak, pull those numbers for comparison
         streak.numbers = RollTrackerData.getUserRolls(user.id)?.streak?.numbers || []
 
-        // If the last roll made was a blind roll, the potential streak currently
-        // under examination includes a blind roll
+        // If the last roll made was a blind roll, the potential streak currently under examination includes a blind roll
         streak.includesBlind = RollTrackerData.getUserRolls(user.id)?.streak?.includesBlind || isBlind
 
         const currentRoll = oldUnsorted.at(-1)
@@ -351,18 +280,18 @@ class RollTrackerData {
             streak.numbers.push(prevRoll)
           }
           streak.numbers.push(currentRoll)
-          const streakThreshold = game.settings.get(RollTracker.ID, RollTracker.SETTINGS.STREAK_THRESHOLD)
+          const streakThreshold = game.settings.get('roll-tracker', 'streak_threshold')
           if (streak.numbers.length >= streakThreshold) {
             const streakString = streak.numbers.join(', ')
             let chatOpts = {
-              content: `<strong>${user.name} is on a streak!</strong> </br> ${streakString}`, speaker: {alias: 'Roll Tracker'}
+              content: `<strong>${user.name} is on a streak!</strong> </br> ${streakString}`,
+              speaker: {alias: 'Roll Tracker'}
             }
 
             // Follow the game setting concerning the visibility of streak messages
-            //
             // If the current roll is blind, or the last roll was blind, the streak message (if generated)
             // is only whispered to the GM, as it may reveal earlier blind rolls
-            const streakStatus = game.settings.get(RollTracker.ID, RollTracker.SETTINGS.STREAK_BEHAVIOUR)
+            const streakStatus = game.settings.get('roll-tracker', 'streak_behaviour')
             if (streakStatus !== 'disable') {
               if (streak.includesBlind || streakStatus === `hidden`) {
                 const gms = game.users.filter(user => user.isGM === true)
@@ -386,18 +315,21 @@ class RollTrackerData {
           // variable tracking the presence of a blind roll in the streak
           streak.includesBlind = !!isBlind;
         }
-        game.users.get(user.id)?.setFlag(RollTracker.ID, RollTracker.FLAGS.STREAK, streak)
+        game.users.get(user.id)?.setFlag('roll-tracker', RollTracker.FLAGS.STREAK, streak)
       } else {
-        updatedRolls = newNumbers
-        oldUnsorted = newNumbers
+        updatedRolls = [rollData.result.roll]
+        oldUnsorted = [rollData.result.roll]
       }
-      return Promise.all([game.users.get(user.id)?.setFlag(RollTracker.ID, RollTracker.FLAGS.SORTED, updatedRolls), game.users.get(user.id)?.setFlag(RollTracker.ID, RollTracker.FLAGS.UNSORTED, oldUnsorted)])
+      return Promise.all([
+        game.users.get(user.id)?.setFlag('roll-tracker', RollTracker.FLAGS.SORTED, updatedRolls),
+        game.users.get(user.id)?.setFlag('roll-tracker', RollTracker.FLAGS.UNSORTED, oldUnsorted),
+      ])
     }
   }
 
   static clearTrackedRolls(userId) {
     // Delete all stored rolls for a specified user ID
-    return Promise.all([game.users.get(userId)?.unsetFlag(RollTracker.ID, RollTracker.FLAGS.SORTED), game.users.get(userId)?.unsetFlag(RollTracker.ID, RollTracker.FLAGS.EXPORT), game.users.get(userId)?.unsetFlag(RollTracker.ID, RollTracker.FLAGS.UNSORTED), game.users.get(userId)?.unsetFlag(RollTracker.ID, RollTracker.FLAGS.STREAK),])
+    return Promise.all([game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.SORTED), game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.EXPORT), game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.UNSORTED), game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.STREAK),])
   }
 
   static sortRolls(rolls) {
@@ -415,22 +347,27 @@ class RollTrackerData {
     let stats = {}
 
     if (!printRolls) {
-      stats.mean = 0, stats.median = 0, stats.mode = [0], stats.comparator = 0, stats.nat1s = 0, stats.nat1sPercentage = 0, stats.nat20s = 0, stats.nat20sPercentage = 0, stats.count = 0
+      stats.mean = 0
+      stats.median = 0
+      stats.mode = [0]
+      stats.comparator = 0
+      stats.nat1s = 0
+      stats.nat1sPercentage = 0
+      stats.nat20s = 0
+      stats.nat20sPercentage = 0
+      stats.count = 0
     } else {
       stats = await this.calculate(printRolls)
-      // For debugging purposes primarily:
-      // stats.lastRoll = this.getUserRolls(userId)?.unsorted.at(-1)
     }
 
     return {
-      username, thisUserId, stats
-      /**, averages */
+      username,
+      thisUserId,
+      stats
     }
   }
 
   static async calculate(rolls) {
-    // Turn the raw data array into usable stats:
-    // Mean
     const sum = rolls.reduce((firstValue, secondValue) => {
       return firstValue + secondValue
     })
@@ -440,7 +377,7 @@ class RollTrackerData {
     // We've already sorted the rolls as they've come in
     let median
 
-    // If there are an odd number of rolls, the median is the centermost number
+    // If there are an odd number of rolls, the median is the center most number
     if (rolls.length % 2 === 1) {
       let medianPosition = Math.floor(rolls.length / 2)
       median = rolls[medianPosition]
@@ -475,7 +412,15 @@ class RollTrackerData {
     const count = rolls.length
 
     return {
-      mean, median, mode, comparator, nat1s, nat1sPercentage, nat20s, nat20sPercentage, count
+      mean,
+      median,
+      mode,
+      comparator,
+      nat1s,
+      nat1sPercentage,
+      nat20s,
+      nat20sPercentage,
+      count
     }
   }
 
@@ -504,7 +449,11 @@ class RollTrackerData {
       }
     }
 
-    return {modeObj, mode, comparator}
+    return {
+      modeObj,
+      mode,
+      comparator
+    }
   }
 
   static prepareExportData(data) {
@@ -516,21 +465,18 @@ class RollTrackerData {
     }
     // We store the filecontent on a flag on the user so it can be quickly accessed if the user
     // decides to click the export button on the RollTrackerDialog header
-    game.users.get(game.userId)?.setFlag(RollTracker.ID, RollTracker.FLAGS.EXPORT, fileContent)
+    game.users.get(game.userId)?.setFlag('roll-tracker', RollTracker.FLAGS.EXPORT, fileContent)
   }
 
   /**
-   *  COMPARATOR
    * This function is meant to generate an overall picture across all players of rankings in the
    * various stats. Code exists to make the averages display alongside the individual player numbers
    * in the tracking card but I didn't like that
-   * **/
-
-
+   **/
   static async generalComparison() {
     let allStats = {}
     for (let user of game.users) {
-      if (game.users.get(user.id)?.getFlag(RollTracker.ID, RollTracker.FLAGS.SORTED)) {
+      if (game.users.get(user.id)?.getFlag('roll-tracker', RollTracker.FLAGS.SORTED)) {
         const rolls = this.getUserRolls(user.id)?.sorted
         allStats[`${user.id}`] = await this.calculate(rolls)
       }
@@ -556,10 +502,10 @@ class RollTrackerData {
     return finalComparison
   }
 
-
-  // A general function to compare incoming 'stats' using a specific data object in the format
-  // generated in the allStats variable of generalComparison()
-
+  /**
+   * A general function to compare incoming 'stats' using a specific data object in the format
+   * generated in the allStats variable of generalComparison()
+   */
   static async statsCompare(allStats, stat) {
     let topStat = -1;
     let comparison = {}
@@ -604,9 +550,10 @@ class RollTrackerData {
     return comparison
   }
 
-  // A function preparing the output object of generalComparison (the obj is called finalComparison)
-  // using previously calculated stats
-
+  /**
+   * A function preparing the output object of generalComparison (the obj is called finalComparison)
+   * using previously calculated stats
+   */
   static async prepStats(finalComparison, statName, statObj, allStats) {
 
     finalComparison[statName] = {}
@@ -634,7 +581,9 @@ class RollTrackerData {
     finalComparison[statName].average = statObj.average
   }
 
-  // Mode has its own way to be prepped as it can be multimodal etc
+  /**
+   * Mode has its own way to be prepped as it can be multimodal etc
+   */
   static async prepMode(finalComparison, comparator, comparators, allStats) {
     finalComparison[comparator] = {}
     finalComparison[comparator].highest = {}
@@ -683,10 +632,12 @@ class RollTrackerDialog extends FormApplication {
   static get defaultOptions() {
     const defaults = super.defaultOptions
     const overrides = {
-      height: 'auto', id: 'roll-tracker', template: RollTracker.TEMPLATES.ROLLTRACK, title: 'Roll Tracker',
+      height: 'auto',
+      id: 'roll-tracker',
+      template: RollTracker.templates.rolltrack,
+      title: 'Roll Tracker',
     }
-    const mergedOptions = foundry.utils.mergeObject(defaults, overrides);
-    return mergedOptions
+    return foundry.utils.mergeObject(defaults, overrides)
   }
 
   get exportData() {
@@ -710,7 +661,7 @@ class RollTrackerDialog extends FormApplication {
 
   async prepCompCard() {
     let comparison = await RollTrackerData.generalComparison()
-    let content = await renderTemplate(RollTracker.TEMPLATES.COMPARISONCARD, comparison)
+    let content = await renderTemplate(RollTracker.templates.COMPARISONCARD, comparison)
     ChatMessage.create({content})
   }
 
@@ -730,7 +681,8 @@ class RollTrackerDialog extends FormApplication {
     switch (action) {
       case 'clear': {
         const confirmed = await Dialog.confirm({
-          title: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.title"), content: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.content"),
+          title: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.title"),
+          content: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.content"),
         })
         if (confirmed) {
           await RollTrackerData.clearTrackedRolls(userId)
@@ -742,7 +694,7 @@ class RollTrackerDialog extends FormApplication {
         const rollData = await RollTrackerData.prepTrackedRolls(this.object)
         rollData.stats.mode = rollData.stats.mode.join(', ')
 
-        const content = await renderTemplate(RollTracker.TEMPLATES.CHATMSG, rollData)
+        const content = await renderTemplate(RollTracker.templates.CHATMSG, rollData)
         ChatMessage.create({content})
       }
     }
@@ -752,7 +704,9 @@ class RollTrackerDialog extends FormApplication {
   _getHeaderButtons() {
     let buttons = super._getHeaderButtons();
     buttons.splice(0, 0, {
-      class: "roll-tracker-form-export", icon: "fas fa-download", onclick: () => {
+      class: "roll-tracker-form-export",
+      icon: "fas fa-download",
+      onclick: () => {
         if (this.exportData) {
           saveDataToFile(this.exportData, 'string', 'roll-data.txt')
         } else {
@@ -762,7 +716,9 @@ class RollTrackerDialog extends FormApplication {
     })
     if (game.user.isGM) {
       buttons.splice(1, 0, {
-        class: "roll-tracker-form-comparison", icon: "fas fa-chart-simple", onclick: () => {
+        class: "roll-tracker-form-comparison",
+        icon: "fas fa-chart-simple",
+        onclick: () => {
           this.prepCompCard()
         }
       })
