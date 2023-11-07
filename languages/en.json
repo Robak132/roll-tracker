@@ -5,8 +5,8 @@
       "mean": "Mean",
       "median": "Median",
       "mode": "Mode",
-      "nat1s": "Natural 1s",
-      "nat20s": "Natural 20s",
+      "autoSuccess": "Auto-success",
+      "autoFailure": "Auto-failure",
       "lastRoll": "Last roll",
       "count": "Rolls Counted",
       "instance": "instance",
@@ -24,8 +24,8 @@
         "mean": "Mean",
         "median": "Median",
         "mode": "Mode",
-        "nat1s": "Natural 1s",
-        "nat20s": "Natural 20s"
+        "autoSuccess": "Natural 1s",
+        "autoFailure": "Natural 20s"
       },
       "descriptors": {
         "highest": "Highest",

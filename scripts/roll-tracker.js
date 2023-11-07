@@ -1,20 +1,10 @@
-/** TODO:
- *  - CAN PLAYERS CLEAR THEIR OWN ROLLS? TREAT FORTUNE/MISFORTUNE AS ONLY THE ROLL TAKEN OR BOTH ROLLED?
- * * HAVE CHECKBOXES FOR WHAT KIND OF ROLLS ARE CONSIDERED - VERY SYSTEM SPECIFIC
- * SIZE OF DICE TO BE TRACKED
- * NEW FEATURES - One click clear everyone's rolls
- *              - Session logs - collect all the rolls for a given log in session and store it. Access past session logs, maybe you can combine them.
- */
-
-/** QUESTIONS:
- * I DON'T UNDERSTAND HOW ROLLTRACKERHELPER.WAITFOR3DDICEMESSAGE ACTUALLY WORKS - WHAT DOES RESOLVE(TRUE) MEAN? DOESN'T IT BECOME
- * AN ENDLESS LOOP IF THE 'ELSE' OF THE FIRST CONDITIONAL JUST RUNS THE FUNCTION AGAIN?
- */
-
 // Whenever a chat message is created, check if it contains a roll. If so, parse it to determine
 // whether it should be tracked, according to our module settings
-Hooks.on('updateChatMessage', async (chatMessage) => {
-  await RollTracker.parseMessage(chatMessage)
+Hooks.on('updateChatMessage', (chatMessage) => {
+  const isBlind = chatMessage.blind
+  if (!isBlind || (isBlind && game.settings.get('roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
+    RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage.flags.testData)
+  }
 })
 
 // This adds our icon to the player list
@@ -43,9 +33,7 @@ Hooks.on('renderPlayerList', (playerList, html) => {
   } else if (game.settings.get('roll-tracker', 'players_see_players')) {
     // find the element which has our logged in user's id
     const loggedInUser = html.find(`[data-user-id="${game.userId}"]`)
-
     const tooltip = game.i18n.localize('ROLL-TRACKER.button-title')
-
     loggedInUser.append(`<button type="button" title='${tooltip}' class="roll-tracker-item-button flex0" id="${game.userId}"><i class="fas fa-dice-d20"></i></button>`)
     html.on('click', `#${game.userId}`, () => {
       new RollTrackerDialog(game.userId).render(true);
@@ -60,7 +48,53 @@ Hooks.once('devModeReady', ({registerPackageDebugFlag}) => {
 
 // Initialize dialog and settings on foundry boot up
 Hooks.once('init', () => {
-  RollTracker.initialize()
+  // A setting to toggle whether the GM can see the icon allowing them access to player roll data or not
+  game.settings.register('roll-tracker', 'gm_see_players', {
+    name: `ROLL-TRACKER.settings.gm_see_players.Name`,
+    default: true,
+    type: Boolean,
+    scope: 'world',
+    config: true,
+    hint: `ROLL-TRACKER.settings.gm_see_players.Hint`,
+    onChange: () => ui.players.render()
+  })
+
+  // A setting to determine how many rolls should be stored at any one time
+  game.settings.register('roll-tracker', 'roll_storage', {
+    name: `ROLL-TRACKER.settings.roll_storage.Name`,
+    default: 50,
+    type: Number,
+    range: {
+      min: 10,
+      max: 500,
+      step: 10
+    },
+    scope: 'world',
+    config: true,
+    hint: `ROLL-TRACKER.settings.roll_storage.Hint`,
+  })
+
+  // A setting to determine whether players can see their own tracked rolls
+  game.settings.register('roll-tracker', 'players_see_players', {
+    name: `ROLL-TRACKER.settings.players_see_players.Name`,
+    default: true,
+    type: Boolean,
+    scope: 'world',
+    config: true,
+    hint: `ROLL-TRACKER.settings.players_see_players.Hint`,
+    onChange: () => ui.players.render()
+  })
+
+  // A setting to determine whether blind GM rolls that PLAYERS make are tracked
+  // Blind GM rolls that GMs make are always tracked
+  game.settings.register('roll-tracker', 'count_hidden', {
+    name: `ROLL-TRACKER.settings.count_hidden.Name`,
+    default: true,
+    type: Boolean,
+    scope: 'world',
+    config: true,
+    hint: `ROLL-TRACKER.settings.count_hidden.Hint`,
+  })
 })
 
 // We're using sockets to ensure the streak message is always transmitted by the GM.
@@ -107,149 +141,34 @@ Handlebars.registerHelper('isSecondLast', function (index, length) {
   }
 });
 
-
-class RollTracker {
-  static FLAGS = {
+class RollTrackerData {
+  static flags = {
     SORTED: 'sorted',
     EXPORT: 'export',
     UNSORTED: 'unsorted',
-    STREAK: 'streak',
   }
-
-  static templates = {
-    rolltrack: `modules/roll-tracker/templates/roll-tracker.hbs`,
-    CHATMSG: `modules/roll-tracker/templates/roll-tracker-chat.hbs`,
-    COMPARISONCARD: `modules/roll-tracker/templates/roll-tracker-comparison-card.hbs`
-  }
-
-  // This logging function ties in with the Developer Mode module. It will log a custom, module namespaced
-  // message in the dev console when RollTracker.log() is called. When Developer Mode is not enabled (as in
-  // most non-dev environments) the log will not show. Prevents logs leaking into full releases
-  static log(force, ...args) {
-    const shouldLog = force || game.modules.get('_dev-mode')?.api?.getPackageDebugValue('roll-tracker')
-
-    if (shouldLog) {
-      console.log('roll-tracker', '|', ...args)
-    }
-  }
-
-  static initialize() {
-    // A setting to toggle whether the GM can see the icon allowing them access to player roll data or not
-    game.settings.register('roll-tracker', 'gm_see_players', {
-      name: `ROLL-TRACKER.settings.gm_see_players.Name`,
-      default: true,
-      type: Boolean,
-      scope: 'world',
-      config: true,
-      hint: `ROLL-TRACKER.settings.gm_see_players.Hint`,
-      onChange: () => ui.players.render()
-    })
-
-    // A setting to determine how many rolls should be stored at any one time
-    game.settings.register('roll-tracker', 'roll_storage', {
-      name: `ROLL-TRACKER.settings.roll_storage.Name`,
-      default: 50,
-      type: Number,
-      range: {
-        min: 10,
-        max: 500,
-        step: 10
-      },
-      scope: 'world',
-      config: true,
-      hint: `ROLL-TRACKER.settings.roll_storage.Hint`,
-    })
-
-    // A setting to determine whether players can see their own tracked rolls
-    game.settings.register('roll-tracker', 'players_see_players', {
-      name: `ROLL-TRACKER.settings.players_see_players.Name`,
-      default: true,
-      type: Boolean,
-      scope: 'world',
-      config: true,
-      hint: `ROLL-TRACKER.settings.players_see_players.Hint`,
-      onChange: () => ui.players.render()
-    })
-
-    // A setting to determine whether blind GM rolls that PLAYERS make are tracked
-    // Blind GM rolls that GMs make are always tracked
-    game.settings.register('roll-tracker', 'count_hidden', {
-      name: `ROLL-TRACKER.settings.count_hidden.Name`,
-      default: true,
-      type: Boolean,
-      scope: 'world',
-      config: true,
-      hint: `ROLL-TRACKER.settings.count_hidden.Hint`,
-    })
-
-    // Are streaks completely disabled, are they shown only to GMs, or are they shown to everyone
-    game.settings.register('roll-tracker', 'streak_behaviour', {
-      name: `ROLL-TRACKER.settings.streak_behaviour.Name`,
-      default: true,
-      type: String,
-      scope: 'world',
-      config: true,
-      hint: `ROLL-TRACKER.settings.streak_behaviour.Hint`,
-      choices: {
-        hidden: game.i18n.localize(`ROLL-TRACKER.settings.streak_behaviour.hidden`),
-        disable: game.i18n.localize(`ROLL-TRACKER.settings.streak_behaviour.disable`),
-        shown: game.i18n.localize(`ROLL-TRACKER.settings.streak_behaviour.shown`)
-      }
-    })
-
-    // What is the threshold of consecutive rolls within 1 point of each other that should be considered a streak?
-    game.settings.register('roll-tracker', 'streak_threshold', {
-      name: `ROLL-TRACKER.settings.streak_threshold.Name`,
-      default: true,
-      type: Number,
-      range: {
-        min: 2,
-        max: 5,
-        step: 1
-      },
-      scope: 'world',
-      config: true,
-      hint: `ROLL-TRACKER.settings.streak_threshold.Hint`
-    })
-  }
-
-  /**
-   * This function creates an object containing all the requirements that need to be met for the roll
-   * to be counted, taking into account all the currently active settings. If all of the conditions are
-   * met, the roll is recorded.
-   */
-  static async parseMessage(chatMessage) {
-    const isBlind = chatMessage.blind
-    if (!isBlind || (isBlind && game.settings.get('roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
-      await RollTrackerData.createTrackedRoll(chatMessage.user, chatMessage.flags.testData, isBlind)
-    }
-  }
-}
-
-class RollTrackerData {
+  
   static getUserRolls(userId) {
-    // A simple retrieve method that gets the stored flag on a specified user
     return {
       user: game.users.get(userId),
-      sorted: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.SORTED),
-      unsorted: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.UNSORTED),
-      export: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.EXPORT),
-      streak: game.users.get(userId)?.getFlag('roll-tracker', RollTracker.FLAGS.STREAK),
+      sorted: game.users.get(userId)?.getFlag('roll-tracker', this.flags.SORTED),
+      unsorted: game.users.get(userId)?.getFlag('roll-tracker', this.flags.UNSORTED),
+      export: game.users.get(userId)?.getFlag('roll-tracker', this.flags.EXPORT),
     }
   }
 
-  static createTrackedRoll(user, rollData, isBlind) {
-    if (game.userId === user.id) {
-      // this check is necessary because (I think) every instance of foundry currently running tries
-      // to create and update these rolls. Players, however, do not have permission to edit the data
-      // of other users, so errors are thrown. This way the only foundry instance that creates the tracked
-      // roll is the foundry instance of the user actually making the roll
-      let updatedRolls
-      let oldSorted = this.getUserRolls(user.id)?.sorted || []
-      let oldUnsorted = this.getUserRolls(user.id)?.unsorted || []
-      const limit = game.settings.get('roll-tracker', 'roll_storage')
-      if (oldUnsorted.length >= limit) {
-        const difference = oldUnsorted.length - limit
+  static saveTrackedRoll(userId, rollData) {
+    // this check is necessary because (I think) every instance of foundry currently running tries
+    // to create and update these rolls. Players, however, do not have permission to edit the data
+    // of other users, so errors are thrown. This way the only foundry instance that creates the tracked
+    // roll is the foundry instance of the user actually making the roll
+    if (game.userId === userId) {
+      const maxTrackedRolls = game.settings.get('roll-tracker', 'roll_storage')
+
+      let oldSorted = this.getUserRolls(userId)?.sorted || []
+      let oldUnsorted = this.getUserRolls(userId)?.unsorted || []
+      if (oldUnsorted.length >= maxTrackedRolls) {
+        const difference = oldUnsorted.length - maxTrackedRolls
         for (let i = 0; i <= difference; i++) {
           const popped = oldUnsorted.shift()
           const remove = oldSorted.findIndex((element) => {
@@ -258,201 +177,117 @@ class RollTrackerData {
           oldSorted.splice(remove, 1)
         }
       }
+
+      let updatedRolls
       if (oldSorted.length) {
         updatedRolls = [...oldSorted]
         updatedRolls.unshift(rollData.result.roll)
         oldUnsorted.push(rollData.result.roll)
-        updatedRolls = this.sortRolls(updatedRolls)
-
-        // Streak calculations
-        let streak = {}
-
-        // If there was an ongoing streak, pull those numbers for comparison
-        streak.numbers = RollTrackerData.getUserRolls(user.id)?.streak?.numbers || []
-
-        // If the last roll made was a blind roll, the potential streak currently under examination includes a blind roll
-        streak.includesBlind = RollTrackerData.getUserRolls(user.id)?.streak?.includesBlind || isBlind
-
-        const currentRoll = oldUnsorted.at(-1)
-        const prevRoll = oldUnsorted.at(-2)
-        if (prevRoll - 1 <= currentRoll && currentRoll <= prevRoll + 1) {
-          if (!streak.numbers.length) {
-            streak.numbers.push(prevRoll)
-          }
-          streak.numbers.push(currentRoll)
-          const streakThreshold = game.settings.get('roll-tracker', 'streak_threshold')
-          if (streak.numbers.length >= streakThreshold) {
-            const streakString = streak.numbers.join(', ')
-            let chatOpts = {
-              content: `<strong>${user.name} is on a streak!</strong> </br> ${streakString}`,
-              speaker: {alias: 'Roll Tracker'}
-            }
-
-            // Follow the game setting concerning the visibility of streak messages
-            // If the current roll is blind, or the last roll was blind, the streak message (if generated)
-            // is only whispered to the GM, as it may reveal earlier blind rolls
-            const streakStatus = game.settings.get('roll-tracker', 'streak_behaviour')
-            if (streakStatus !== 'disable') {
-              if (streak.includesBlind || streakStatus === `hidden`) {
-                const gms = game.users.filter(user => user.isGM === true)
-                chatOpts.whisper = gms.map(gm => gm.id)
-              }
-              if (!game.user.isGM) {
-                game.socket.emit("module.roll-tracker", chatOpts)
-              } else {
-                ChatMessage.create(chatOpts)
-              }
-            }
-          }
-        } else {
-          // If the last rolled number is not within 1 of the current rolled number, discard
-          // the streak
-          streak.numbers = []
-
-          // If there is no current streak but the current current roll is blind, a potential future
-          // streak includes a blind number.
-          // However if there is no current streak and the current roll is NOT blind, reset the
-          // variable tracking the presence of a blind roll in the streak
-          streak.includesBlind = !!isBlind;
-        }
-        game.users.get(user.id)?.setFlag('roll-tracker', RollTracker.FLAGS.STREAK, streak)
       } else {
         updatedRolls = [rollData.result.roll]
         oldUnsorted = [rollData.result.roll]
       }
       return Promise.all([
-        game.users.get(user.id)?.setFlag('roll-tracker', RollTracker.FLAGS.SORTED, updatedRolls),
-        game.users.get(user.id)?.setFlag('roll-tracker', RollTracker.FLAGS.UNSORTED, oldUnsorted),
+        game.users.get(userId)?.setFlag('roll-tracker', this.flags.SORTED, updatedRolls),
+        game.users.get(userId)?.setFlag('roll-tracker', this.flags.UNSORTED, oldUnsorted),
       ])
     }
   }
 
-  static clearTrackedRolls(userId) {
-    // Delete all stored rolls for a specified user ID
-    return Promise.all([game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.SORTED), game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.EXPORT), game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.UNSORTED), game.users.get(userId)?.unsetFlag('roll-tracker', RollTracker.FLAGS.STREAK),])
+  static async clearTrackedRolls(userId) {
+    return Promise.all([
+      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.SORTED),
+      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.EXPORT),
+      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.UNSORTED),
+    ])
   }
 
-  static sortRolls(rolls) {
-    // Used to sort the rolls in ascending order for the purposes of median calculation
-    return rolls.sort((a, b) => a - b)
-  }
-
-  static async prepTrackedRolls(userId) {
-    // Package data for access via the FormApplication
-
-    const username = this.getUserRolls(userId).user.name
-    const thisUserId = this.getUserRolls(userId).user.id
-    const printRolls = this.getUserRolls(userId).sorted
+  static prepTrackedRolls(userId) {
+    const userRolls = this.getUserRolls(userId)
+    const username = userRolls.user.name
+    const printRolls = userRolls.unsorted
 
     let stats = {}
-
     if (!printRolls) {
       stats.mean = 0
       stats.median = 0
       stats.mode = [0]
-      stats.comparator = 0
-      stats.nat1s = 0
-      stats.nat1sPercentage = 0
-      stats.nat20s = 0
-      stats.nat20sPercentage = 0
+      stats.modeCount = 0
+      stats.autoSuccess = 0
+      stats.autoSuccessPercentage = 0
+      stats.autoFailure = 0
+      stats.autoFailurePercentage = 0
       stats.count = 0
     } else {
-      stats = await this.calculate(printRolls)
+      stats = this.calcStats(printRolls)
     }
 
     return {
       username,
-      thisUserId,
+      userId,
       stats
     }
   }
 
-  static async calculate(rolls) {
-    const sum = rolls.reduce((firstValue, secondValue) => {
-      return firstValue + secondValue
-    })
-    const mean = Math.round(sum / rolls.length)
-
-    // Median
-    // We've already sorted the rolls as they've come in
-    let median
-
-    // If there are an odd number of rolls, the median is the center most number
-    if (rolls.length % 2 === 1) {
-      let medianPosition = Math.floor(rolls.length / 2)
-      median = rolls[medianPosition]
-      // If there are an even number of rolls, the median is the average of the two
-      // centermost numbers
-    } else {
-      let beforeMedian = (rolls.length / 2)
-      let afterMedian = beforeMedian + 1
-      // Subtracting one from each as we transition from length -> index
-      // There's a shorter way of doing this but this makes the most sense to me for later
-      median = (rolls[beforeMedian - 1] + rolls[afterMedian - 1]) / 2
-    }
-
-
-    // Mode
-    const res = await this.calcMode(rolls)
-    const modeObj = res.modeObj
-    const mode = res.mode
-    const comparator = res.comparator
-
-    // We prepare the export data file at this point because the data is conveniently
-    // ordered in modeObj
-    this.prepareExportData(modeObj)
-
-    // How many Nat1s or Nat20s do we have? Convert into % as well.
-    const nat1s = modeObj[1] || 0
-    const nat1sPercentage = (Math.round((nat1s / rolls.length) * 100))
-    const nat20s = modeObj[20] || 0
-    const nat20sPercentage = (Math.round((nat20s / rolls.length) * 100))
-
-    // How many rolls are being counted?
+  static calcStats(rolls) {
+    const mean = calcAverage(rolls);
+    const median = calcMedian(rolls);
+    const {rollStats, mode, modeCount} = this.calcMode(rolls)
+    const autoSuccess = Object.entries(rollStats).reduce((acc, [key, value]) => {
+      if (key <= game.settings.get("wfrp4e", "automaticSuccess")) return acc+value
+      return acc
+    }, 0)
+    const autoSuccessPercentage = (Math.round((autoSuccess / rolls.length) * 100))
+    const autoFailure = Object.entries(rollStats).reduce((acc, [key, value]) => {
+      if (key >= game.settings.get("wfrp4e", "automaticFailure")) return acc+value
+      return acc
+    }, 0)
+    const autoFailurePercentage = (Math.round((autoFailure / rolls.length) * 100))
+    const lastRoll = rolls.slice(0)
     const count = rolls.length
+
+    this.prepareExportData(rollStats)
 
     return {
       mean,
       median,
       mode,
-      comparator,
-      nat1s,
-      nat1sPercentage,
-      nat20s,
-      nat20sPercentage,
+      modeCount,
+      autoSuccess,
+      autoSuccessPercentage,
+      autoFailure,
+      autoFailurePercentage,
+      lastRoll,
       count
     }
   }
 
-  static async calcMode(rolls) {
-    // Mode
-    let modeObj = {}
+  static calcMode(rolls) {
+    let rollStats = {}
+    let modeCount = 0
+    let mode = []
+
     rolls.forEach(e => {
-      if (!modeObj[e]) {
-        modeObj[e] = 1
+      if (!rollStats[e]) {
+        rollStats[e] = 1
       } else {
-        modeObj[e]++
+        rollStats[e]++
       }
     })
-
-    // the 'comparator' is the integer showing how many times the mode appears
-    let comparator = 0
-
-    let mode = []
-    for (let rollNumber in modeObj) {
-      if (modeObj[rollNumber] > comparator) {
-        comparator = modeObj[rollNumber]
+    for (let rollNumber in rollStats) {
+      if (rollStats[rollNumber] > modeCount) {
+        modeCount = rollStats[rollNumber]
         mode.splice(0)
         mode.push(rollNumber)
-      } else if (modeObj[rollNumber] === comparator) {
+      } else if (rollStats[rollNumber] === modeCount) {
         mode.push(rollNumber)
       }
     }
 
     return {
-      modeObj,
+      rollStats,
       mode,
-      comparator
+      modeCount
     }
   }
 
@@ -465,7 +300,7 @@ class RollTrackerData {
     }
     // We store the filecontent on a flag on the user so it can be quickly accessed if the user
     // decides to click the export button on the RollTrackerDialog header
-    game.users.get(game.userId)?.setFlag('roll-tracker', RollTracker.FLAGS.EXPORT, fileContent)
+    game.users.get(game.userId)?.setFlag('roll-tracker', this.flags.EXPORT, fileContent)
   }
 
   /**
@@ -476,27 +311,26 @@ class RollTrackerData {
   static async generalComparison() {
     let allStats = {}
     for (let user of game.users) {
-      if (game.users.get(user.id)?.getFlag('roll-tracker', RollTracker.FLAGS.SORTED)) {
+      if (game.users.get(user.id)?.getFlag('roll-tracker', this.flags.SORTED)) {
         const rolls = this.getUserRolls(user.id)?.sorted
-        allStats[`${user.id}`] = await this.calculate(rolls)
+        allStats[`${user.id}`] = this.calcStats(rolls)
       }
     }
-    // highest/lowest of
 
     const comparators = await this.statsCompare(allStats, 'comparator')
     const means = await this.statsCompare(allStats, 'mean')
     const medians = await this.statsCompare(allStats, 'median')
-    const nat1s = await this.statsCompare(allStats, 'nat1s')
-    const nat1sPercentage = await this.statsCompare(allStats, 'nat1sPercentage')
-    const nat20s = await this.statsCompare(allStats, 'nat20s')
-    const nat20sPercentage = await this.statsCompare(allStats, 'nat20sPercentage')
+    const autoSuccess = await this.statsCompare(allStats, 'autoSuccess')
+    const autoSuccessPercentage = await this.statsCompare(allStats, 'autoSuccessPercentage')
+    const autoFailure = await this.statsCompare(allStats, 'autoFailure')
+    const autoFailurePercentage = await this.statsCompare(allStats, 'autoFailurePercentage')
     let finalComparison = {}
     this.prepStats(finalComparison, 'mean', means, allStats)
     this.prepStats(finalComparison, 'median', medians, allStats)
-    this.prepStats(finalComparison, 'nat1s', nat1s, allStats)
-    this.prepStats(finalComparison, 'nat1sPercentage', nat1sPercentage, allStats)
-    this.prepStats(finalComparison, 'nat20s', nat20s, allStats)
-    this.prepStats(finalComparison, 'nat20sPercentage', nat20sPercentage, allStats)
+    this.prepStats(finalComparison, 'autoSuccess', autoSuccess, allStats)
+    this.prepStats(finalComparison, 'autoSuccessPercentage', autoSuccessPercentage, allStats)
+    this.prepStats(finalComparison, 'autoFailure', autoFailure, allStats)
+    this.prepStats(finalComparison, 'autoFailurePercentage', autoFailurePercentage, allStats)
     this.prepMode(finalComparison, 'comparator', comparators, allStats)
 
     return finalComparison
@@ -625,16 +459,22 @@ class RollTrackerData {
 
 class RollTrackerDialog extends FormApplication {
   constructor(userId, options = {}) {
-    // the first argument is the object, the second are the options
     super(userId, options)
   }
 
+  static templates = {
+    rolltrack: `modules/roll-tracker/templates/roll-tracker.hbs`,
+    chatmsg: `modules/roll-tracker/templates/roll-tracker-chat.hbs`,
+    comparisoncard: `modules/roll-tracker/templates/roll-tracker-comparison-card.hbs`
+  }
+  
   static get defaultOptions() {
     const defaults = super.defaultOptions
     const overrides = {
       height: 'auto',
+      width: 'auto',
       id: 'roll-tracker',
-      template: RollTracker.templates.rolltrack,
+      template: this.templates.rolltrack,
       title: 'Roll Tracker',
     }
     return foundry.utils.mergeObject(defaults, overrides)
@@ -645,23 +485,20 @@ class RollTrackerDialog extends FormApplication {
   }
 
   async getData() {
-    const rollData = await RollTrackerData.prepTrackedRolls(this.object)
+    const rollData = RollTrackerData.prepTrackedRolls(this.object)
 
     // The lines below convert the mode array returned from prepTrackedRolls into a prettier
     // string for display purposes. We choose to do the conversion to string here so that the
     // prepTrackedRolls func can continue to generate raw data which can be more easily
     // read/compared/manipulated, as in generalComparison()
 
-    // const modeString_averages = rollData.averages.mode.join(', ')
     rollData.stats.mode = rollData.stats.mode.join(', ')
-    // rollData.averages.mode = modeString_averages
-
     return rollData
   }
 
   async prepCompCard() {
     let comparison = await RollTrackerData.generalComparison()
-    let content = await renderTemplate(RollTracker.templates.COMPARISONCARD, comparison)
+    let content = await renderTemplate(this.templates.comparisoncard, comparison)
     ChatMessage.create({content})
   }
 
@@ -680,7 +517,7 @@ class RollTrackerDialog extends FormApplication {
     const userId = clickedElement.parents(`[data-userId]`)?.data().userid
     switch (action) {
       case 'clear': {
-        const confirmed = await Dialog.confirm({
+        const confirmed = Dialog.confirm({
           title: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.title"),
           content: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.content"),
         })
@@ -691,16 +528,15 @@ class RollTrackerDialog extends FormApplication {
         break
       }
       case 'print': {
-        const rollData = await RollTrackerData.prepTrackedRolls(this.object)
+        const rollData = RollTrackerData.prepTrackedRolls(this.object)
         rollData.stats.mode = rollData.stats.mode.join(', ')
 
-        const content = await renderTemplate(RollTracker.templates.CHATMSG, rollData)
+        const content = await renderTemplate(this.templates.chatmsg, rollData)
         ChatMessage.create({content})
       }
     }
   }
 
-  // This function gets the header data from FormApplication but modifies it to add our export button
   _getHeaderButtons() {
     let buttons = super._getHeaderButtons();
     buttons.splice(0, 0, {
@@ -725,5 +561,23 @@ class RollTrackerDialog extends FormApplication {
     }
     return buttons
   }
+}
 
+function calcAverage(list) {
+  const sum = list.reduce((firstValue, secondValue) => {
+    return firstValue + secondValue
+  })
+  return Math.round(sum / list.length);
+}
+
+function calcMedian(list) {
+  list = list.sort((a, b) => a - b)
+  if (list.length % 2 === 1) {
+    let medianPosition = Math.floor(list.length / 2)
+    return list[medianPosition]
+  } else {
+    let beforeMedian = (list.length / 2)
+    let afterMedian = beforeMedian + 1
+    return (list[beforeMedian - 1] + list[afterMedian - 1]) / 2
+  }
 }
