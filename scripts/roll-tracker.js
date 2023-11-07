@@ -123,7 +123,6 @@ class RollTrackerData {
         type: rollData.result.skillName
       }
 
-      let oldSorted = this.getUserRolls(userId)?.sorted || []
       let oldUnsorted = this.getUserRolls(userId)?.unsorted || []
       if (oldUnsorted.length >= maxTrackedRolls) {
         const difference = oldUnsorted.length - maxTrackedRolls
@@ -136,7 +135,7 @@ class RollTrackerData {
         }
       }
 
-      if (oldSorted.length) {
+      if (oldUnsorted.length) {
         oldUnsorted.push(roll)
       } else {
         oldUnsorted = [roll]
