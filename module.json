@@ -13,7 +13,8 @@
   ],
   "version": "1.8.2",
   "scripts": [
-    "scripts/roll-tracker.js"
+    "scripts/roll-tracker.js",
+    "scripts/handlebars.js"
   ],
   "styles": [
     "styles/roll-tracker.css"

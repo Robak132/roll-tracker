@@ -1,9 +1,9 @@
 // Whenever a chat message is created, check if it contains a roll. If so, parse it to determine
 // whether it should be tracked, according to our module settings
-Hooks.on('updateChatMessage', (chatMessage) => {
+Hooks.on('updateChatMessage', async (chatMessage) => {
   const isBlind = chatMessage.blind
   if (!isBlind || (isBlind && game.settings.get('roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
-    RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage.flags.testData)
+    await RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage.flags.testData)
   }
 })
 
@@ -97,49 +97,6 @@ Hooks.once('init', () => {
   })
 })
 
-// We're using sockets to ensure the streak message is always transmitted by the GM.
-// This allows us to completely hide it from players if a part of the streak was blind, or if
-// the Hide All Streak Messages setting is enabled
-Hooks.once('ready', () => {
-  game.socket.on("module.roll-tracker", (data) => {
-    if (game.user.isGM) {
-      ChatMessage.create(data)
-    }
-  })
-})
-
-// The following helper functions help us to make and display the right strings for chat cards and the comparison card
-// Mostly they're checking for multiple modes, or ties in the case of the comparison card
-Handlebars.registerHelper('isOne', function (value) {
-  return value === 1;
-});
-
-Handlebars.registerHelper('isTwo', function (value) {
-  return value === 2;
-});
-
-Handlebars.registerHelper('isThreePlus', function (value) {
-  return value > 2;
-});
-
-// If the length of the input array is more than one, there is a tie (whether in mode or for a given statistic like highest mean)
-Handlebars.registerHelper('isTie', function (value) {
-  return value.length > 1;
-});
-
-// To check if the current item being iterated over is the last item in the array
-Handlebars.registerHelper('isLast', function (index, length) {
-  if (length - index === 1) {
-    return true
-  }
-});
-
-// To check if the current item being iterated over is the second last item in the array
-Handlebars.registerHelper('isSecondLast', function (index, length) {
-  if (length - index === 2) {
-    return true
-  }
-});
 
 class RollTrackerData {
   static flags = {
@@ -147,7 +104,7 @@ class RollTrackerData {
     EXPORT: 'export',
     UNSORTED: 'unsorted',
   }
-  
+
   static getUserRolls(userId) {
     return {
       user: game.users.get(userId),
@@ -157,13 +114,14 @@ class RollTrackerData {
     }
   }
 
-  static saveTrackedRoll(userId, rollData) {
-    // this check is necessary because (I think) every instance of foundry currently running tries
-    // to create and update these rolls. Players, however, do not have permission to edit the data
-    // of other users, so errors are thrown. This way the only foundry instance that creates the tracked
-    // roll is the foundry instance of the user actually making the roll
+  static async saveTrackedRoll(userId, rollData) {
     if (game.userId === userId) {
       const maxTrackedRolls = game.settings.get('roll-tracker', 'roll_storage')
+      const roll = {
+        value: rollData.result.roll,
+        success: rollData.result.outcome === "success",
+        type: rollData.result.skillName
+      }
 
       let oldSorted = this.getUserRolls(userId)?.sorted || []
       let oldUnsorted = this.getUserRolls(userId)?.unsorted || []
@@ -178,37 +136,28 @@ class RollTrackerData {
         }
       }
 
-      let updatedRolls
       if (oldSorted.length) {
-        updatedRolls = [...oldSorted]
-        updatedRolls.unshift(rollData.result.roll)
-        oldUnsorted.push(rollData.result.roll)
+        oldUnsorted.push(roll)
       } else {
-        updatedRolls = [rollData.result.roll]
-        oldUnsorted = [rollData.result.roll]
+        oldUnsorted = [roll]
       }
       return Promise.all([
-        game.users.get(userId)?.setFlag('roll-tracker', this.flags.SORTED, updatedRolls),
-        game.users.get(userId)?.setFlag('roll-tracker', this.flags.UNSORTED, oldUnsorted),
+        game.users.get(userId)?.setFlag('roll-tracker', this.flags.UNSORTED, oldUnsorted)
       ])
     }
   }
 
   static async clearTrackedRolls(userId) {
-    return Promise.all([
-      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.SORTED),
-      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.EXPORT),
-      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.UNSORTED),
-    ])
+    return Promise.all([game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.SORTED), game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.EXPORT), game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.UNSORTED),])
   }
 
-  static prepTrackedRolls(userId) {
+  static prepareRollStats(userId) {
     const userRolls = this.getUserRolls(userId)
     const username = userRolls.user.name
-    const printRolls = userRolls.unsorted
+    const rolls = userRolls.unsorted
 
     let stats = {}
-    if (!printRolls) {
+    if (!rolls) {
       stats.mean = 0
       stats.median = 0
       stats.mode = [0]
@@ -219,7 +168,7 @@ class RollTrackerData {
       stats.autoFailurePercentage = 0
       stats.count = 0
     } else {
-      stats = this.calcStats(printRolls)
+      stats = this.calcStats(rolls)
     }
 
     return {
@@ -230,20 +179,21 @@ class RollTrackerData {
   }
 
   static calcStats(rolls) {
-    const mean = calcAverage(rolls);
-    const median = calcMedian(rolls);
-    const {rollStats, mode, modeCount} = this.calcMode(rolls)
+    const mean = calcAverage(rolls.map(r => r.value));
+    const median = calcMedian(rolls.map(r => r.value));
+    const {rollStats, mode, modeCount} = this.calcMode(rolls.map(r => r.value))
+    const modeCountPercentage = (Math.round((modeCount / rolls.length) * 100))
     const autoSuccess = Object.entries(rollStats).reduce((acc, [key, value]) => {
-      if (key <= game.settings.get("wfrp4e", "automaticSuccess")) return acc+value
+      if (key <= game.settings.get("wfrp4e", "automaticSuccess")) return acc + value
       return acc
     }, 0)
     const autoSuccessPercentage = (Math.round((autoSuccess / rolls.length) * 100))
     const autoFailure = Object.entries(rollStats).reduce((acc, [key, value]) => {
-      if (key >= game.settings.get("wfrp4e", "automaticFailure")) return acc+value
+      if (key >= game.settings.get("wfrp4e", "automaticFailure")) return acc + value
       return acc
     }, 0)
     const autoFailurePercentage = (Math.round((autoFailure / rolls.length) * 100))
-    const lastRoll = rolls.slice(0)
+    const lastRoll = rolls[rolls.length - 1].value
     const count = rolls.length
 
     this.prepareExportData(rollStats)
@@ -253,6 +203,7 @@ class RollTrackerData {
       median,
       mode,
       modeCount,
+      modeCountPercentage,
       autoSuccess,
       autoSuccessPercentage,
       autoFailure,
@@ -312,7 +263,7 @@ class RollTrackerData {
     let allStats = {}
     for (let user of game.users) {
       if (game.users.get(user.id)?.getFlag('roll-tracker', this.flags.SORTED)) {
-        const rolls = this.getUserRolls(user.id)?.sorted
+        const rolls = this.getUserRolls(user.id)?.unsorted
         allStats[`${user.id}`] = this.calcStats(rolls)
       }
     }
@@ -462,19 +413,13 @@ class RollTrackerDialog extends FormApplication {
     super(userId, options)
   }
 
-  static templates = {
-    rolltrack: `modules/roll-tracker/templates/roll-tracker.hbs`,
-    chatmsg: `modules/roll-tracker/templates/roll-tracker-chat.hbs`,
-    comparisoncard: `modules/roll-tracker/templates/roll-tracker-comparison-card.hbs`
-  }
-  
   static get defaultOptions() {
     const defaults = super.defaultOptions
     const overrides = {
       height: 'auto',
       width: 'auto',
       id: 'roll-tracker',
-      template: this.templates.rolltrack,
+      template: `modules/roll-tracker/templates/roll-tracker.hbs`,
       title: 'Roll Tracker',
     }
     return foundry.utils.mergeObject(defaults, overrides)
@@ -485,7 +430,7 @@ class RollTrackerDialog extends FormApplication {
   }
 
   async getData() {
-    const rollData = RollTrackerData.prepTrackedRolls(this.object)
+    const rollData = RollTrackerData.prepareRollStats(this.object)
 
     // The lines below convert the mode array returned from prepTrackedRolls into a prettier
     // string for display purposes. We choose to do the conversion to string here so that the
@@ -498,7 +443,7 @@ class RollTrackerDialog extends FormApplication {
 
   async prepCompCard() {
     let comparison = await RollTrackerData.generalComparison()
-    let content = await renderTemplate(this.templates.comparisoncard, comparison)
+    let content = await renderTemplate(`modules/roll-tracker/templates/roll-tracker-comparison-card.hbs`, comparison)
     ChatMessage.create({content})
   }
 
@@ -528,10 +473,9 @@ class RollTrackerDialog extends FormApplication {
         break
       }
       case 'print': {
-        const rollData = RollTrackerData.prepTrackedRolls(this.object)
+        const rollData = RollTrackerData.prepareRollStats(this.object)
         rollData.stats.mode = rollData.stats.mode.join(', ')
-
-        const content = await renderTemplate(this.templates.chatmsg, rollData)
+        const content = await renderTemplate(`modules/roll-tracker/templates/roll-tracker-chat.hbs`, rollData)
         ChatMessage.create({content})
       }
     }
@@ -562,6 +506,7 @@ class RollTrackerDialog extends FormApplication {
     return buttons
   }
 }
+
 
 function calcAverage(list) {
   const sum = list.reduce((firstValue, secondValue) => {
