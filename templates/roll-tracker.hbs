@@ -12,14 +12,14 @@
         <ul class="roll-tracker-form flexcol">
             <li><span class="roll-tracker-form stat">{{localize "ROLL-TRACKER.form-label.autoSuccess"}}: </span>{{stats.autoSuccess}} ({{stats.autoSuccessPercentage}}%)</li>
             <li><span class="roll-tracker-form stat">{{localize "ROLL-TRACKER.form-label.autoFailure"}}: </span>{{stats.autoFailure}} ({{stats.autoFailurePercentage}}%)</li>
-            <li><span class="roll-tracker-form stat">Criticals: </span>{{stats.criticals}} ({{stats.criticalsPercentage}}%)</li>
-            <li><span class="roll-tracker-form stat">Fumbles: </span>{{stats.fumbles}} ({{stats.fumblesPercentage}}%)</li>
+            <li><span class="roll-tracker-form stat">{{localize "ROLL-TRACKER.form-label.criticals"}}: </span>{{stats.criticals}} ({{stats.criticalsPercentage}}%)</li>
+            <li><span class="roll-tracker-form stat">{{localize "ROLL-TRACKER.form-label.fumbles"}}: </span>{{stats.fumbles}} ({{stats.fumblesPercentage}}%)</li>
         </ul>
         <h1 class="roll-tracker-form-heading">Fortune & Dark Deals</h1>
         <ul class="roll-tracker-form flexcol">
-            <li><span class="roll-tracker-form stat">Fortune: </span>{{stats.autoSuccess}} ({{stats.autoSuccessPercentage}}%)</li>
-            <li><span class="roll-tracker-form stat">Fortune (+1 SL): </span>{{stats.autoFailure}} ({{stats.autoFailurePercentage}}%)</li>
-            <li><span class="roll-tracker-form stat">Dark Deal: </span></li>
+            <li><span class="roll-tracker-form stat">Fortune Reroll: </span>{{stats.fortune}}</li>
+            <li><span class="roll-tracker-form stat">Fortune +1 SL: </span>{{stats.fortuneSL}}</li>
+            <li><span class="roll-tracker-form stat">Dark Deal: </span>{{stats.darkDeal}}</li>
         </ul>
         <button type="button" class="roll-tracker-form-button-delete" data-action="clear"><i class="fas fa-times"></i>{{localize "ROLL-TRACKER.form-button.clear"}}</button>
         <button type="button" class="roll-tracker-form-button-print" data-action="print"><i class="fas fa-eye"></i>{{localize "ROLL-TRACKER.form-button.print"}}</button>

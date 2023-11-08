@@ -8,10 +8,9 @@
       "autoSuccess": "Auto-success",
       "autoFailure": "Auto-failure",
       "lastRoll": "Last roll",
-      "count": "Rolls Counted",
-      "instance": "instance",
-      "instances": "instances",
-      "each": "each"
+      "criticals": "Criticals",
+      "fumbles": "Fumbles",
+      "count": "Rolls Counted"
     },
     "form-button": {
       "clear": "Clear Data",

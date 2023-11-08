@@ -66,7 +66,7 @@ Hooks.once('init', () => {
     default: 50,
     type: Number,
     range: {
-      min: 10,
+      min: -1,
       max: 500,
       step: 10
     },
@@ -100,46 +100,38 @@ Hooks.once('init', () => {
 
 
 class RollTrackerData {
-  static flags = {
-    SORTED: 'sorted',
-    EXPORT: 'export',
-    UNSORTED: 'unsorted',
-  }
-
   static getUserRolls(userId) {
     return {
       user: game.users.get(userId),
-      sorted: game.users.get(userId)?.getFlag('roll-tracker', this.flags.SORTED),
-      unsorted: game.users.get(userId)?.getFlag('roll-tracker', this.flags.UNSORTED),
-      export: game.users.get(userId)?.getFlag('roll-tracker', this.flags.EXPORT),
+      data: game.users.get(userId)?.getFlag('roll-tracker', 'data'),
+      export: game.users.get(userId)?.getFlag('roll-tracker', 'export'),
     }
   }
 
   static async saveTrackedRoll(userId, chatMessage) {
     if (game.userId === userId) {
-      const maxTrackedRolls = game.settings.get('roll-tracker', 'roll_storage')
-      let data = this.getUserRolls(userId)?.unsorted || []
+      let maxTrackedRolls = game.settings.get('roll-tracker', 'roll_storage')
+      let data = this.getUserRolls(userId)?.data || []
 
       // Message was processed earlier
       if (data.filter(r => r.id === chatMessage.id).length !== 0) return
 
-      console.log(`Processed = ${chatMessage}`)
-
+      const lastRoll = data[data.length - 1]
+      const messageResult = chatMessage.flags.testData.result
+      const messageContext = chatMessage.flags.testData.context
       const roll = {
         id: chatMessage.id,
-        value: chatMessage.flags.testData.result.roll,
-        success: chatMessage.flags.testData.result.outcome === "success",
-        type: chatMessage.flags.testData.result.skillName
+        value: messageResult.roll,
+        success: messageResult.outcome === "success",
+        type: messageResult.skillName,
+        fortuneUsedReroll: messageContext?.fortuneUsedReroll === true && lastRoll?.fortuneUsedReroll !== true,
+        darkDealReroll: messageContext?.reroll === true && (messageContext?.fortuneUsedReroll !== true || lastRoll?.fortuneUsedReroll === true)
       }
 
-      if (data.length >= maxTrackedRolls) {
+      if (maxTrackedRolls > -1 && data.length >= maxTrackedRolls) {
         const difference = data.length - maxTrackedRolls
         for (let i = 0; i <= difference; i++) {
-          const popped = data.shift()
-          const remove = oldSorted.findIndex((element) => {
-            return element === popped
-          })
-          oldSorted.splice(remove, 1)
+          data.shift()
         }
       }
 
@@ -149,29 +141,28 @@ class RollTrackerData {
         data = [roll]
       }
       return Promise.all([
-        game.users.get(userId)?.setFlag('roll-tracker', this.flags.UNSORTED, data)
+        game.users.get(userId)?.setFlag('roll-tracker', 'data', data)
       ])
     }
   }
 
   static async clearTrackedRolls(userId) {
     return Promise.all([
-      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.SORTED),
-      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.EXPORT),
-      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.UNSORTED),
+      game.users.get(userId)?.unsetFlag('roll-tracker', 'export'),
+      game.users.get(userId)?.unsetFlag('roll-tracker', 'data'),
     ])
   }
 
   static prepareRollStats(userId) {
     const userRolls = this.getUserRolls(userId)
     const username = userRolls.user.name
-    const rolls = userRolls.unsorted
+    const rolls = userRolls.data
 
     let stats = {}
     if (!rolls) {
       stats.mean = 0
       stats.median = 0
-      stats.mode = [0]
+      stats.mode = 0
       stats.modeCount = 0
       stats.count = 0
       stats.autoSuccess = 0
@@ -180,6 +171,9 @@ class RollTrackerData {
       stats.autoFailurePercentage = 0
       stats.criticals = 0
       stats.fumbles = 0
+      stats.fortune = 0
+      stats.fortuneSL = 0
+      stats.darkDeal = 0
     } else {
       stats = this.calcStats(rolls)
     }
@@ -202,25 +196,21 @@ class RollTrackerData {
 
     // WFRP
     const autoSuccess = Object.entries(rollStats).reduce((acc, [key, value]) => {
-      if (key <= game.settings.get("wfrp4e", "automaticSuccess")) return acc + value
-      return acc
-    }, 0)
+      if (key <= game.settings.get("wfrp4e", "automaticSuccess")) return acc + value;return acc}, 0)
     const autoSuccessPercentage = (Math.round((autoSuccess / rolls.length) * 100))
     const autoFailure = Object.entries(rollStats).reduce((acc, [key, value]) => {
-      if (key >= game.settings.get("wfrp4e", "automaticFailure")) return acc + value
-      return acc
-    }, 0)
+      if (key >= game.settings.get("wfrp4e", "automaticFailure")) return acc + value;return acc}, 0)
     const autoFailurePercentage = (Math.round((autoFailure / rolls.length) * 100))
     const criticals = rolls.reduce((acc, roll) => {
-      if ((roll.value % 11 === 0 || roll.value === 100) && roll.success) return acc + 1
-      return acc
-    }, 0)
+      if ((roll.value % 11 === 0 || roll.value === 100) && roll.success) return acc + 1;return acc}, 0)
     const criticalsPercentage = (Math.round((criticals / rolls.length) * 100))
     const fumbles = rolls.reduce((acc, roll) => {
-      if ((roll.value % 11 === 0 || roll.value === 100) && !roll.success) return acc + 1
-      return acc
-    }, 0)
+      if ((roll.value % 11 === 0 || roll.value === 100) && !roll.success) return acc + 1;return acc}, 0)
     const fumblesPercentage = (Math.round((fumbles / rolls.length) * 100))
+
+    // Fortune & Dark Deals
+    const fortune = rolls.reduce((acc, roll) => {if (roll.fortuneUsedReroll) return acc + 1; return acc}, 0)
+    const darkDeal = rolls.reduce((acc, roll) => {if (roll.darkDealReroll) return acc + 1; return acc}, 0)
 
     this.prepareExportData(rollStats)
 
@@ -238,6 +228,8 @@ class RollTrackerData {
       criticalsPercentage,
       fumbles,
       fumblesPercentage,
+      fortune,
+      darkDeal,
       lastRoll,
       count
     }
@@ -246,7 +238,7 @@ class RollTrackerData {
   static calcMode(rolls) {
     let rollStats = {}
     let modeCount = 0
-    let mode = []
+    let mode = 0
 
     rolls.forEach(e => {
       if (!rollStats[e]) {
@@ -258,10 +250,7 @@ class RollTrackerData {
     for (let rollNumber in rollStats) {
       if (rollStats[rollNumber] > modeCount) {
         modeCount = rollStats[rollNumber]
-        mode.splice(0)
-        mode.push(rollNumber)
-      } else if (rollStats[rollNumber] === modeCount) {
-        mode.push(rollNumber)
+        mode = rollNumber
       }
     }
 
@@ -281,7 +270,7 @@ class RollTrackerData {
     }
     // We store the filecontent on a flag on the user so it can be quickly accessed if the user
     // decides to click the export button on the RollTrackerDialog header
-    game.users.get(game.userId)?.setFlag('roll-tracker', this.flags.EXPORT, fileContent)
+    game.users.get(game.userId)?.setFlag('roll-tracker', 'export', fileContent)
   }
 
   /**
@@ -292,8 +281,8 @@ class RollTrackerData {
   static async generalComparison() {
     let allStats = {}
     for (let user of game.users) {
-      if (game.users.get(user.id)?.getFlag('roll-tracker', this.flags.SORTED)) {
-        const rolls = this.getUserRolls(user.id)?.unsorted
+      if (game.users.get(user.id)?.getFlag('roll-tracker', 'data')) {
+        const rolls = this.getUserRolls(user.id)?.data
         allStats[`${user.id}`] = this.calcStats(rolls)
       }
     }
@@ -460,7 +449,6 @@ class RollTrackerDialog extends FormApplication {
 
   async getData() {
     const rollData = RollTrackerData.prepareRollStats(this.object)
-    rollData.stats.mode = rollData.stats.mode.join(', ')
     this.options.title = `${rollData.username}: Roll Tracker`
     return rollData
   }
@@ -494,7 +482,6 @@ class RollTrackerDialog extends FormApplication {
       }
       case 'print': {
         const rollData = RollTrackerData.prepareRollStats(this.object)
-        rollData.stats.mode = rollData.stats.mode.join(', ')
         const content = await renderTemplate(`modules/roll-tracker/templates/roll-tracker-chat.hbs`, rollData)
         ChatMessage.create({content})
       }
