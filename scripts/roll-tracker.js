@@ -2,8 +2,9 @@
 // whether it should be tracked, according to our module settings
 Hooks.on('updateChatMessage', async (chatMessage) => {
   const isBlind = chatMessage.blind
+  if (!chatMessage.flags.testData) return
   if (!isBlind || (isBlind && game.settings.get('roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
-    await RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage.flags.testData)
+    await RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage)
   }
 })
 
@@ -114,20 +115,27 @@ class RollTrackerData {
     }
   }
 
-  static async saveTrackedRoll(userId, rollData) {
+  static async saveTrackedRoll(userId, chatMessage) {
     if (game.userId === userId) {
       const maxTrackedRolls = game.settings.get('roll-tracker', 'roll_storage')
+      let data = this.getUserRolls(userId)?.unsorted || []
+
+      // Message was processed earlier
+      if (data.filter(r => r.id === chatMessage.id).length !== 0) return
+
+      console.log(`Processed = ${chatMessage}`)
+
       const roll = {
-        value: rollData.result.roll,
-        success: rollData.result.outcome === "success",
-        type: rollData.result.skillName
+        id: chatMessage.id,
+        value: chatMessage.flags.testData.result.roll,
+        success: chatMessage.flags.testData.result.outcome === "success",
+        type: chatMessage.flags.testData.result.skillName
       }
 
-      let oldUnsorted = this.getUserRolls(userId)?.unsorted || []
-      if (oldUnsorted.length >= maxTrackedRolls) {
-        const difference = oldUnsorted.length - maxTrackedRolls
+      if (data.length >= maxTrackedRolls) {
+        const difference = data.length - maxTrackedRolls
         for (let i = 0; i <= difference; i++) {
-          const popped = oldUnsorted.shift()
+          const popped = data.shift()
           const remove = oldSorted.findIndex((element) => {
             return element === popped
           })
@@ -135,19 +143,23 @@ class RollTrackerData {
         }
       }
 
-      if (oldUnsorted.length) {
-        oldUnsorted.push(roll)
+      if (data.length) {
+        data.push(roll)
       } else {
-        oldUnsorted = [roll]
+        data = [roll]
       }
       return Promise.all([
-        game.users.get(userId)?.setFlag('roll-tracker', this.flags.UNSORTED, oldUnsorted)
+        game.users.get(userId)?.setFlag('roll-tracker', this.flags.UNSORTED, data)
       ])
     }
   }
 
   static async clearTrackedRolls(userId) {
-    return Promise.all([game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.SORTED), game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.EXPORT), game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.UNSORTED),])
+    return Promise.all([
+      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.SORTED),
+      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.EXPORT),
+      game.users.get(userId)?.unsetFlag('roll-tracker', this.flags.UNSORTED),
+    ])
   }
 
   static prepareRollStats(userId) {
@@ -161,11 +173,13 @@ class RollTrackerData {
       stats.median = 0
       stats.mode = [0]
       stats.modeCount = 0
+      stats.count = 0
       stats.autoSuccess = 0
       stats.autoSuccessPercentage = 0
       stats.autoFailure = 0
       stats.autoFailurePercentage = 0
-      stats.count = 0
+      stats.criticals = 0
+      stats.fumbles = 0
     } else {
       stats = this.calcStats(rolls)
     }
@@ -178,10 +192,15 @@ class RollTrackerData {
   }
 
   static calcStats(rolls) {
+    // D100
     const mean = calcAverage(rolls.map(r => r.value));
     const median = calcMedian(rolls.map(r => r.value));
     const {rollStats, mode, modeCount} = this.calcMode(rolls.map(r => r.value))
     const modeCountPercentage = (Math.round((modeCount / rolls.length) * 100))
+    const lastRoll = rolls.map(r=>r.value).join(", ")
+    const count = rolls.length
+
+    // WFRP
     const autoSuccess = Object.entries(rollStats).reduce((acc, [key, value]) => {
       if (key <= game.settings.get("wfrp4e", "automaticSuccess")) return acc + value
       return acc
@@ -192,8 +211,16 @@ class RollTrackerData {
       return acc
     }, 0)
     const autoFailurePercentage = (Math.round((autoFailure / rolls.length) * 100))
-    const lastRoll = rolls[rolls.length - 1].value
-    const count = rolls.length
+    const criticals = rolls.reduce((acc, roll) => {
+      if ((roll.value % 11 === 0 || roll.value === 100) && roll.success) return acc + 1
+      return acc
+    }, 0)
+    const criticalsPercentage = (Math.round((criticals / rolls.length) * 100))
+    const fumbles = rolls.reduce((acc, roll) => {
+      if ((roll.value % 11 === 0 || roll.value === 100) && !roll.success) return acc + 1
+      return acc
+    }, 0)
+    const fumblesPercentage = (Math.round((fumbles / rolls.length) * 100))
 
     this.prepareExportData(rollStats)
 
@@ -207,6 +234,10 @@ class RollTrackerData {
       autoSuccessPercentage,
       autoFailure,
       autoFailurePercentage,
+      criticals,
+      criticalsPercentage,
+      fumbles,
+      fumblesPercentage,
       lastRoll,
       count
     }
@@ -416,10 +447,9 @@ class RollTrackerDialog extends FormApplication {
     const defaults = super.defaultOptions
     const overrides = {
       height: 'auto',
-      width: 'auto',
+      width: '400',
       id: 'roll-tracker',
       template: `modules/roll-tracker/templates/roll-tracker.hbs`,
-      title: 'Roll Tracker',
     }
     return foundry.utils.mergeObject(defaults, overrides)
   }
@@ -430,13 +460,8 @@ class RollTrackerDialog extends FormApplication {
 
   async getData() {
     const rollData = RollTrackerData.prepareRollStats(this.object)
-
-    // The lines below convert the mode array returned from prepTrackedRolls into a prettier
-    // string for display purposes. We choose to do the conversion to string here so that the
-    // prepTrackedRolls func can continue to generate raw data which can be more easily
-    // read/compared/manipulated, as in generalComparison()
-
     rollData.stats.mode = rollData.stats.mode.join(', ')
+    this.options.title = `${rollData.username}: Roll Tracker`
     return rollData
   }
 
@@ -448,10 +473,6 @@ class RollTrackerDialog extends FormApplication {
 
   activateListeners(html) {
     super.activateListeners(html);
-
-    // With the below function, we are specifying that for the _handleButtonClick function,
-    // the keyword 'this' will refer to the current value of this as used in the bind function
-    // i.e. RollTrackerDialog
     html.on('click', "[data-action]", this._handleButtonClick.bind(this))
   }
 
@@ -461,7 +482,7 @@ class RollTrackerDialog extends FormApplication {
     const userId = clickedElement.parents(`[data-userId]`)?.data().userid
     switch (action) {
       case 'clear': {
-        const confirmed = Dialog.confirm({
+        const confirmed = await Dialog.confirm({
           title: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.title"),
           content: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.content"),
         })
