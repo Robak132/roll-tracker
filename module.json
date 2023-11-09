@@ -11,7 +11,7 @@
       "flags": {}
     }
   ],
-  "version": "1.8.2",
+  "version": "1.0.0",
   "scripts": [
     "scripts/roll-tracker.js",
     "scripts/handlebars.js"
@@ -28,7 +28,7 @@
     }
   ],
   "socket": true,
-  "id": "roll-tracker",
+  "id": "wfrp4e-roll-tracker",
   "compatibility": {
     "minimum": "11",
     "verified": "11"
