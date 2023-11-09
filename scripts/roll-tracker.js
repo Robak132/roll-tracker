@@ -1,5 +1,3 @@
-// Whenever a chat message is created, check if it contains a roll. If so, parse it to determine
-// whether it should be tracked, according to our module settings
 Hooks.on('updateChatMessage', async (chatMessage) => {
   const isBlind = chatMessage.blind
   if (!chatMessage.flags.testData) return
@@ -7,6 +5,8 @@ Hooks.on('updateChatMessage', async (chatMessage) => {
     await RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage)
   }
 })
+
+Hooks.on('createChatMessage', async (chatMessage) => {})
 
 // This adds our icon to the player list
 Hooks.on('renderPlayerList', (playerList, html) => {
