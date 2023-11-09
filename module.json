@@ -29,6 +29,9 @@
   ],
   "socket": true,
   "id": "wfrp4e-roll-tracker",
+  "url": "https://github.com/Robak132/wfrp4e-roll-tracker",
+  "manifest": "https://github.com/Robak132/wfrp4e-roll-tracker/releases/download/latest/module.json",
+  "download": "https://github.com/Robak132/wfrp4e-roll-tracker/releases/download/latest/module.zip",
   "compatibility": {
     "minimum": "11",
     "verified": "11"
