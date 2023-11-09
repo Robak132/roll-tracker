@@ -1,17 +1,22 @@
 Hooks.on('updateChatMessage', async (chatMessage) => {
   const isBlind = chatMessage.blind
   if (!chatMessage.flags.testData) return
-  if (!isBlind || (isBlind && game.settings.get('roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
-    await RollTrackerData.saveTrackedRoll(chatMessage.user.id, chatMessage)
+  if (!isBlind || (isBlind && game.settings.get('wfrp4e-roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
+    await game.rollTracker.saveTrackedRoll(chatMessage.user.id, chatMessage)
   }
 })
 
-Hooks.on('createChatMessage', async (chatMessage) => {})
+Hooks.on('createChatMessage', async (chatMessage) => {
+  const isBlind = chatMessage.blind
+  if (!isBlind || (isBlind && game.settings.get('wfrp4e-roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
+    await game.rollTracker.saveReRoll(chatMessage.user.id, chatMessage)
+  }
+})
 
 // This adds our icon to the player list
 Hooks.on('renderPlayerList', (playerList, html) => {
   if (game.user.isGM) {
-    if (game.settings.get('roll-tracker', 'gm_see_players')) {
+    if (game.settings.get('wfrp4e-roll-tracker', 'gm_see_players')) {
       // This adds our icon to ALL players on the player list, if the setting is toggled
       const tooltip = game.i18n.localize('ROLL-TRACKER.button-title')
       // create the button where we want it to be
@@ -31,7 +36,7 @@ Hooks.on('renderPlayerList', (playerList, html) => {
         new RollTrackerDialog(game.userId).render(true);
       })
     }
-  } else if (game.settings.get('roll-tracker', 'players_see_players')) {
+  } else if (game.settings.get('wfrp4e-roll-tracker', 'players_see_players')) {
     // find the element which has our logged in user's id
     const loggedInUser = html.find(`[data-user-id="${game.userId}"]`)
     const tooltip = game.i18n.localize('ROLL-TRACKER.button-title')
@@ -44,13 +49,15 @@ Hooks.on('renderPlayerList', (playerList, html) => {
 
 // Register our module with the Dev Mode module, for logging purposes
 Hooks.once('devModeReady', ({registerPackageDebugFlag}) => {
-  registerPackageDebugFlag('roll-tracker')
+  registerPackageDebugFlag('wfrp4e-roll-tracker')
 })
 
 // Initialize dialog and settings on foundry boot up
 Hooks.once('init', () => {
+  game.rollTracker = new RollTracker();
+
   // A setting to toggle whether the GM can see the icon allowing them access to player roll data or not
-  game.settings.register('roll-tracker', 'gm_see_players', {
+  game.settings.register('wfrp4e-roll-tracker', 'gm_see_players', {
     name: `ROLL-TRACKER.settings.gm_see_players.Name`,
     default: true,
     type: Boolean,
@@ -61,7 +68,7 @@ Hooks.once('init', () => {
   })
 
   // A setting to determine how many rolls should be stored at any one time
-  game.settings.register('roll-tracker', 'roll_storage', {
+  game.settings.register('wfrp4e-roll-tracker', 'roll_storage', {
     name: `ROLL-TRACKER.settings.roll_storage.Name`,
     default: 50,
     type: Number,
@@ -76,7 +83,7 @@ Hooks.once('init', () => {
   })
 
   // A setting to determine whether players can see their own tracked rolls
-  game.settings.register('roll-tracker', 'players_see_players', {
+  game.settings.register('wfrp4e-roll-tracker', 'players_see_players', {
     name: `ROLL-TRACKER.settings.players_see_players.Name`,
     default: true,
     type: Boolean,
@@ -88,7 +95,7 @@ Hooks.once('init', () => {
 
   // A setting to determine whether blind GM rolls that PLAYERS make are tracked
   // Blind GM rolls that GMs make are always tracked
-  game.settings.register('roll-tracker', 'count_hidden', {
+  game.settings.register('wfrp4e-roll-tracker', 'count_hidden', {
     name: `ROLL-TRACKER.settings.count_hidden.Name`,
     default: true,
     type: Boolean,
@@ -99,33 +106,48 @@ Hooks.once('init', () => {
 })
 
 
-class RollTrackerData {
-  static getUserRolls(userId) {
+class RollTracker {
+  getUserData(userId) {
     return {
       user: game.users.get(userId),
-      data: game.users.get(userId)?.getFlag('roll-tracker', 'data'),
-      export: game.users.get(userId)?.getFlag('roll-tracker', 'export'),
+      data: game.users.get(userId)?.getFlag('wfrp4e-roll-tracker', 'data'),
+      reroll: game.users.get(userId)?.getFlag('wfrp4e-roll-tracker', 'reroll'),
+      export: game.users.get(userId)?.getFlag('wfrp4e-roll-tracker', 'export'),
     }
   }
 
-  static async saveTrackedRoll(userId, chatMessage) {
+  async saveReRoll(userId, chatMessage) {
     if (game.userId === userId) {
-      let maxTrackedRolls = game.settings.get('roll-tracker', 'roll_storage')
-      let data = this.getUserRolls(userId)?.data || []
+      let rerollData = this.getUserData(userId)?.reroll || {fortune: 0, fortuneSL: 0, darkDeal: 0}
+
+      if (chatMessage.content.includes(game.i18n.localize("DARKDEAL.UsageText").replace("{character}", ""))) {
+        rerollData.darkDeal++
+      } else if (chatMessage.content.includes(game.i18n.localize("FORTUNE.UsageRerollText").replace("{character}", ""))) {
+        rerollData.fortune++
+      } else if (chatMessage.content.includes(game.i18n.localize("FORTUNE.UsageAddSLText").replace("{character}", ""))) {
+        rerollData.fortuneSL++
+      }
+
+      return Promise.all([
+        game.users.get(userId)?.setFlag('wfrp4e-roll-tracker', 'reroll', rerollData)
+      ])
+    }
+  }
+
+  async saveTrackedRoll(userId, chatMessage) {
+    if (game.userId === userId) {
+      let maxTrackedRolls = game.settings.get('wfrp4e-roll-tracker', 'roll_storage')
+      let data = this.getUserData(userId)?.data || []
 
       // Message was processed earlier
       if (data.filter(r => r.id === chatMessage.id).length !== 0) return
 
-      const lastRoll = data[data.length - 1]
       const messageResult = chatMessage.flags.testData.result
-      const messageContext = chatMessage.flags.testData.context
       const roll = {
         id: chatMessage.id,
         value: messageResult.roll,
         success: messageResult.outcome === "success",
         type: messageResult.skillName,
-        fortuneUsedReroll: messageContext?.fortuneUsedReroll === true && lastRoll?.fortuneUsedReroll !== true,
-        darkDealReroll: messageContext?.reroll === true && (messageContext?.fortuneUsedReroll !== true || lastRoll?.fortuneUsedReroll === true)
       }
 
       if (maxTrackedRolls > -1 && data.length >= maxTrackedRolls) {
@@ -141,20 +163,21 @@ class RollTrackerData {
         data = [roll]
       }
       return Promise.all([
-        game.users.get(userId)?.setFlag('roll-tracker', 'data', data)
+        game.users.get(userId)?.setFlag('wfrp4e-roll-tracker', 'data', data)
       ])
     }
   }
 
-  static async clearTrackedRolls(userId) {
+  async clearTrackedRolls(userId) {
     return Promise.all([
-      game.users.get(userId)?.unsetFlag('roll-tracker', 'export'),
-      game.users.get(userId)?.unsetFlag('roll-tracker', 'data'),
+      game.users.get(userId)?.unsetFlag('wfrp4e-roll-tracker', 'export'),
+      game.users.get(userId)?.unsetFlag('wfrp4e-roll-tracker', 'data'),
+      game.users.get(userId)?.unsetFlag('wfrp4e-roll-tracker', 'reroll'),
     ])
   }
 
-  static prepareRollStats(userId) {
-    const userRolls = this.getUserRolls(userId)
+  prepareRollStats(userId) {
+    const userRolls = this.getUserData(userId)
     const username = userRolls.user.name
     const rolls = userRolls.data
 
@@ -171,11 +194,18 @@ class RollTrackerData {
       stats.autoFailurePercentage = 0
       stats.criticals = 0
       stats.fumbles = 0
+    } else {
+      stats = this.calcStats(rolls)
+    }
+    if (!userRolls.reroll) {
       stats.fortune = 0
       stats.fortuneSL = 0
       stats.darkDeal = 0
     } else {
-      stats = this.calcStats(rolls)
+      const {fortune, fortuneSL, darkDeal} = userRolls.reroll
+      stats.fortune = fortune
+      stats.fortuneSL = fortuneSL
+      stats.darkDeal = darkDeal
     }
 
     return {
@@ -185,7 +215,7 @@ class RollTrackerData {
     }
   }
 
-  static calcStats(rolls) {
+  calcStats(rolls) {
     // D100
     const mean = calcAverage(rolls.map(r => r.value));
     const median = calcMedian(rolls.map(r => r.value));
@@ -208,10 +238,6 @@ class RollTrackerData {
       if ((roll.value % 11 === 0 || roll.value === 100) && !roll.success) return acc + 1;return acc}, 0)
     const fumblesPercentage = (Math.round((fumbles / rolls.length) * 100))
 
-    // Fortune & Dark Deals
-    const fortune = rolls.reduce((acc, roll) => {if (roll.fortuneUsedReroll) return acc + 1; return acc}, 0)
-    const darkDeal = rolls.reduce((acc, roll) => {if (roll.darkDealReroll) return acc + 1; return acc}, 0)
-
     this.prepareExportData(rollStats)
 
     return {
@@ -228,14 +254,12 @@ class RollTrackerData {
       criticalsPercentage,
       fumbles,
       fumblesPercentage,
-      fortune,
-      darkDeal,
       lastRoll,
       count
     }
   }
 
-  static calcMode(rolls) {
+  calcMode(rolls) {
     let rollStats = {}
     let modeCount = 0
     let mode = 0
@@ -261,7 +285,7 @@ class RollTrackerData {
     }
   }
 
-  static prepareExportData(data) {
+  prepareExportData(data) {
     // prepare the roll data for export to an R-friendly text file
     const keys = Object.keys(data)
     let fileContent = ``
@@ -270,7 +294,7 @@ class RollTrackerData {
     }
     // We store the filecontent on a flag on the user so it can be quickly accessed if the user
     // decides to click the export button on the RollTrackerDialog header
-    game.users.get(game.userId)?.setFlag('roll-tracker', 'export', fileContent)
+    game.users.get(game.userId)?.setFlag('wfrp4e-roll-tracker', 'export', fileContent)
   }
 
   /**
@@ -278,11 +302,11 @@ class RollTrackerData {
    * various stats. Code exists to make the averages display alongside the individual player numbers
    * in the tracking card but I didn't like that
    **/
-  static async generalComparison() {
+  async generalComparison() {
     let allStats = {}
     for (let user of game.users) {
-      if (game.users.get(user.id)?.getFlag('roll-tracker', 'data')) {
-        const rolls = this.getUserRolls(user.id)?.data
+      if (game.users.get(user.id)?.getFlag('wfrp4e-roll-tracker', 'data')) {
+        const rolls = this.getUserData(user.id)?.data
         allStats[`${user.id}`] = this.calcStats(rolls)
       }
     }
@@ -310,7 +334,7 @@ class RollTrackerData {
    * A general function to compare incoming 'stats' using a specific data object in the format
    * generated in the allStats variable of generalComparison()
    */
-  static async statsCompare(allStats, stat) {
+  async statsCompare(allStats, stat) {
     let topStat = -1;
     let comparison = {}
     for (let user in allStats) {
@@ -358,7 +382,7 @@ class RollTrackerData {
    * A function preparing the output object of generalComparison (the obj is called finalComparison)
    * using previously calculated stats
    */
-  static async prepStats(finalComparison, statName, statObj, allStats) {
+  async prepStats(finalComparison, statName, statObj, allStats) {
 
     finalComparison[statName] = {}
     finalComparison[statName].highest = []
@@ -388,7 +412,7 @@ class RollTrackerData {
   /**
    * Mode has its own way to be prepped as it can be multimodal etc
    */
-  static async prepMode(finalComparison, comparator, comparators, allStats) {
+  async prepMode(finalComparison, comparator, comparators, allStats) {
     finalComparison[comparator] = {}
     finalComparison[comparator].highest = {}
     for (let user of comparators.top) {
@@ -437,25 +461,25 @@ class RollTrackerDialog extends FormApplication {
     const overrides = {
       height: 'auto',
       width: '400',
-      id: 'roll-tracker',
-      template: `modules/roll-tracker/templates/roll-tracker.hbs`,
+      id: 'wfrp4e-roll-tracker',
+      template: `modules/wfrp4e-roll-tracker/templates/roll-tracker.hbs`,
     }
     return foundry.utils.mergeObject(defaults, overrides)
   }
 
   get exportData() {
-    return RollTrackerData.getUserRolls(game.userId)?.export
+    return game.rollTracker.getUserData(game.userId)?.export
   }
 
   async getData() {
-    const rollData = RollTrackerData.prepareRollStats(this.object)
+    const rollData = game.rollTracker.prepareRollStats(this.object)
     this.options.title = `${rollData.username}: Roll Tracker`
     return rollData
   }
 
   async prepCompCard() {
-    let comparison = await RollTrackerData.generalComparison()
-    let content = await renderTemplate(`modules/roll-tracker/templates/roll-tracker-comparison-card.hbs`, comparison)
+    let comparison = await game.rollTracker.generalComparison()
+    let content = await renderTemplate(`modules/wfrp4e-roll-tracker/templates/roll-tracker-comparison-card.hbs`, comparison)
     ChatMessage.create({content})
   }
 
@@ -475,14 +499,14 @@ class RollTrackerDialog extends FormApplication {
           content: game.i18n.localize("ROLL-TRACKER.confirms.clear_rolls.content"),
         })
         if (confirmed) {
-          await RollTrackerData.clearTrackedRolls(userId)
+          await game.rollTracker.clearTrackedRolls(userId)
           this.render();
         }
         break
       }
       case 'print': {
-        const rollData = RollTrackerData.prepareRollStats(this.object)
-        const content = await renderTemplate(`modules/roll-tracker/templates/roll-tracker-chat.hbs`, rollData)
+        const rollData = game.rollTracker.prepareRollStats(this.object)
+        const content = await renderTemplate(`modules/wfrp4e-roll-tracker/templates/roll-tracker-chat.hbs`, rollData)
         ChatMessage.create({content})
       }
     }
