@@ -187,13 +187,16 @@ class RollTracker {
       stats.median = 0
       stats.mode = 0
       stats.modeCount = 0
+      stats.modeCountPercentage = 0
       stats.count = 0
       stats.autoSuccess = 0
       stats.autoSuccessPercentage = 0
       stats.autoFailure = 0
       stats.autoFailurePercentage = 0
       stats.criticals = 0
+      stats.criticalsPercentage = 0
       stats.fumbles = 0
+      stats.fumblesPercentage = 0
     } else {
       stats = this.calcStats(rolls)
     }
