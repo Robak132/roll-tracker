@@ -9,7 +9,11 @@ Hooks.on('updateChatMessage', async (chatMessage) => {
 Hooks.on('createChatMessage', async (chatMessage) => {
   const isBlind = chatMessage.blind
   if (!isBlind || (isBlind && game.settings.get('wfrp4e-roll-tracker', 'count_hidden')) || (isBlind && chatMessage.user.isGM)) {
-    await game.rollTracker.saveReRoll(chatMessage.user.id, chatMessage)
+    if (chatMessage.isRoll && chatMessage.rolls[0]?.dice[0]?.faces === 100) {
+      await game.rollTracker.saveSimpleRoll(chatMessage.user.id, chatMessage)
+    } else {
+      await game.rollTracker.saveReRoll(chatMessage.user.id, chatMessage)
+    }
   }
 })
 
@@ -148,6 +152,38 @@ class RollTracker {
         value: messageResult.roll,
         success: messageResult.outcome === "success",
         type: messageResult.skillName,
+      }
+
+      if (maxTrackedRolls > -1 && data.length >= maxTrackedRolls) {
+        const difference = data.length - maxTrackedRolls
+        for (let i = 0; i <= difference; i++) {
+          data.shift()
+        }
+      }
+
+      if (data.length) {
+        data.push(roll)
+      } else {
+        data = [roll]
+      }
+      return Promise.all([
+        game.users.get(userId)?.setFlag('wfrp4e-roll-tracker', 'data', data)
+      ])
+    }
+  }
+
+  async saveSimpleRoll(userId, chatMessage) {
+    if (game.userId === userId) {
+      let maxTrackedRolls = game.settings.get('wfrp4e-roll-tracker', 'roll_storage')
+      let data = this.getUserData(userId)?.data || []
+
+      // Message was processed earlier
+      if (data.filter(r => r.id === chatMessage.id).length !== 0) return
+      const roll = {
+        id: chatMessage.id,
+        value: chatMessage.rolls[0].total,
+        success: undefined,
+        type: "simple",
       }
 
       if (maxTrackedRolls > -1 && data.length >= maxTrackedRolls) {
