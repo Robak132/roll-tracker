@@ -569,7 +569,7 @@ class RollTrackerDialog extends FormApplication {
         class: "roll-tracker-form-comparison",
         icon: "fas fa-chart-simple",
         onclick: () => {
-          this.prepCompCard()
+          // this.prepCompCard()
         }
       })
     }
