@@ -4,11 +4,13 @@
   "authors": [
     {
       "name": "drexl93",
-      "flags": {}
+      "url": "https://github.com/drexl93/"
     },
     {
       "name": "Robak132",
-      "flags": {}
+      "email": "kubarob13@gmail.com",
+      "url": "https://github.com/Robak132/",
+      "discord": "robak132"
     }
   ],
   "version": "1.0.1",
@@ -34,6 +36,15 @@
   "download": "https://github.com/Robak132/wfrp4e-roll-tracker/releases/download/latest/module.zip",
   "compatibility": {
     "minimum": "11",
-    "verified": "11"
+    "verified": "11",
+    "maximum": "11"
+  },
+  "relationships": {
+    "systems": [
+      {
+        "id": "wfrp4e",
+        "type": "system"
+      }
+    ]
   }
 }

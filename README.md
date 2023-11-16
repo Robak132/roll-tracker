@@ -5,3 +5,6 @@ Based on [drexl93's module](https://github.com/drexl93/roll-tracker).
 ## Usage
 Access the Roll Tracker from the Player List in the bottom left.  
 ![Access Roll Tracker](https://i.imgur.com/TdGtQic.png)
+
+## Manifest Link
+https://github.com/mclemente/fvtt-dice-tray/releases/latest/download/module.json

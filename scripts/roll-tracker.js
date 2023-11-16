@@ -493,6 +493,7 @@ class RollTracker {
 class RollTrackerDialog extends FormApplication {
   constructor(userId, options = {}) {
     super(userId, options)
+    console.log(game.users.get(userId)?.getFlag('wfrp4e-roll-tracker', 'data'))
   }
 
   static get defaultOptions() {
