@@ -7,4 +7,4 @@ Access the Roll Tracker from the Player List in the bottom left.
 ![Access Roll Tracker](https://i.imgur.com/TdGtQic.png)
 
 ## Manifest Link
-https://github.com/mclemente/fvtt-dice-tray/releases/latest/download/module.json
+https://github.com/Robak132/wfrp4e-roll-tracker/releases/download/latest/module.json
