@@ -17,8 +17,8 @@ jobs:
         run: echo ::set-output name=VERSION::${GITHUB_REF#refs/*/}
       - name: Zip files
         run: |
-          zip -r ${{ steps.get_version.outputs.VERSION }}.zip *
-      - name: Create Release
+          zip -r module.zip *
+      - name: Create Versioned Release
         id: create_versioned_release
         uses: ncipollo/release-action@v1
         with:
@@ -29,3 +29,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: './module.json,./module.zip'
           tag: ${{ steps.get-version.outputs.version }}
+      - name: Create Release
+        id: create_latest_release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          name: Latest
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: './module.json,./module.zip'
+          tag: latest
